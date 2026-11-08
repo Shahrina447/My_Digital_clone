@@ -309,13 +309,21 @@ def _chunks_table(chunks: List[Dict[str, Any]]) -> str:
 
 def _compare_modes(query: str, top_k: int) -> str:
     if not query.strip():
-        return "*Enter a question on the left to compare modes.*"
-    out = []
-    for mode in ("BM25 only", "Dense only", "Hybrid (RRF)"):
+        return ""
+    rows = []
+    results = {}
+    for mode in ("Hybrid (RRF)", "BM25 only", "Dense only"):
         chunks = engine.retrieve(query, mode=mode, top_k=top_k)
-        ids = ", ".join(f"`{c['chunk_id']}`" for c in chunks) or "—"
-        out.append(f"**{mode}:** {ids}")
-    return "\n\n".join(out)
+        results[mode] = [c["chunk_id"] for c in chunks]
+
+    max_rows = max(len(v) for v in results.values())
+    header = "| Rank | Hybrid (RRF) | BM25 only | Dense only |\n|------|-------------|-----------|------------|\n"
+    for i in range(max_rows):
+        h = results["Hybrid (RRF)"][i] if i < len(results["Hybrid (RRF)"]) else "—"
+        b = results["BM25 only"][i]    if i < len(results["BM25 only"])    else "—"
+        d = results["Dense only"][i]   if i < len(results["Dense only"])   else "—"
+        rows.append(f"| {i+1} | `{h}` | `{b}` | `{d}` |")
+    return header + "\n".join(rows)
 
 
 # ── Main query handler ────────────────────────────────────────────────────────
@@ -345,15 +353,15 @@ def set_example(q: str) -> str:
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 EXAMPLES = [
-    "Where are you from?",
-    "What degree are you doing?",
-    "What semester are you in?",
-    "What is DeadlineOS?",
-    "Tell me about Verdade",
-    "What is Arbitrix?",
-    "What are your hobbies?",
-    "Do you like cooking?",
-    "What are your future goals?",
+    "What is schedule density blindness in DeadlineOS?",
+    "What is the digital-twin feature in DeadlineOS?",
+    "What accuracy did Verdade achieve on external tests?",
+    "How does Verdade handle uncertainty in predictions?",
+    "What is the Rescue Center in DeadlineOS?",
+    "What dataset was Verdade trained on?",
+    "What certification do you have from HEC?",
+    "What is Arbitrix and how does it use RAG?",
+    "How do you handle code bugs or unexpected errors?",
     "Are you the real Shahrina?",
 ]
 
@@ -395,22 +403,27 @@ css = """
 /* ─── Gen-by label ──────────────────────────────────────── */
 #gen-by .prose { color: var(--body-text-color-subdued) !important; font-size: 0.78rem !important; }
 
-/* ─── Example chip buttons ──────────────────────────────── */
+/* ─── Example chip buttons — inline wrapping ────────────── */
+.chips-wrap {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    margin-top: 6px;
+}
 .chip button {
     background: var(--background-fill-secondary) !important;
     border: 1px solid var(--border-color-primary) !important;
     border-radius: 20px !important;
-    padding: 5px 14px !important;
-    font-size: 0.82rem !important;
+    padding: 5px 13px !important;
+    font-size: 0.80rem !important;
     text-align: left !important;
     color: var(--body-text-color) !important;
-    margin: 2px 0 !important;
-    width: 100% !important;
-    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap !important;
+    width: auto !important;
+    transition: border-color 0.15s;
 }
 .chip button:hover {
     border-color: var(--color-accent) !important;
-    background: var(--background-fill-primary) !important;
 }
 
 /* ─── Chunks section ────────────────────────────────────── */
@@ -527,9 +540,11 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
             gr.HTML("<hr style='margin:16px 0;opacity:0.2'>")
             gr.HTML("<div class='section-head'>Try an example</div>")
 
+            gr.HTML('<div class="chips-wrap">')
             for ex in EXAMPLES:
                 btn = gr.Button(ex, size="sm", elem_classes=["chip"], variant="secondary")
                 btn.click(fn=lambda q=ex: q, inputs=[], outputs=[query_box])
+            gr.HTML('</div>')
 
     # ── Retrieved chunks (full-width below) ───────────────────────────────────
     gr.HTML("<div class='section-head' style='margin-top:16px'>Retrieved chunks (source, chunk ID and scores)</div>")
