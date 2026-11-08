@@ -49,12 +49,12 @@ Rules:
 4. If asked whether you are the real person, say you are an AI clone of Shahrina Khan, not the real person.
 5. Keep your response direct, clear, and under 150 words."""
 
-# Free HF Inference API models (no Pro subscription needed)
+# Free HF Inference Providers models (new provider-based API)
 HF_MODELS = [
-    "HuggingFaceH4/zephyr-7b-beta",
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
-    "microsoft/Phi-3-mini-4k-instruct",
-    "google/gemma-2-2b-it",
+    "Qwen/Qwen2.5-3B-Instruct",
 ]
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -74,7 +74,10 @@ class CloneEngine:
 
     def _get_hf_client(self) -> InferenceClient:
         """Create a fresh HF InferenceClient each call (safe on ZeroGPU)."""
-        return InferenceClient(token=self.hf_token)
+        return InferenceClient(
+            provider="hf-inference",
+            token=self.hf_token,
+        )
 
     def _load_knowledge(self) -> None:
         chunks_file = Path("chunks.json")
@@ -194,7 +197,7 @@ class CloneEngine:
 
     # ── Generation ────────────────────────────────────────────────────────────
     def generate(self, query: str, chunks: List[Dict[str, Any]],
-                 model: str = "HuggingFaceH4/zephyr-7b-beta") -> Tuple[str, str]:
+                 model: str = "meta-llama/Llama-3.2-3B-Instruct") -> Tuple[str, str]:
         """Returns (answer, generated_by_label)."""
         if not chunks:
             return "I don't have that in my notes.", "—"
@@ -461,7 +464,7 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
 
             model_dropdown = gr.Dropdown(
                 choices=HF_MODELS,
-                value="HuggingFaceH4/zephyr-7b-beta",
+                value="meta-llama/Llama-3.2-3B-Instruct",
                 label="LLM:",
                 interactive=True,
             )
