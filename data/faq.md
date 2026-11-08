@@ -1,4 +1,4 @@
-# FAQ – Shahrina Khan (First Person)
+![alt text](image.png)# FAQ – Shahrina Khan (First Person)
 
 ### Personal & Background
 **Q: What is your full name?**  
@@ -84,14 +84,11 @@ A: Yes, I built a RAG system in Arbitrix using statutory chunking and Gemini emb
 A: Yes, I have built domain-specific generative AI chatbots and automated workflows with n8n.
 
 ### Skills & Tools
-**Q: Which frontend technologies do you use?**  
-A: I mainly use Next.js 14, React, TypeScript/JavaScript, Vite, Tailwind CSS, Framer Motion, and Chrome Extension development (Manifest V3).
+**Q: What are your main technical interests?**  
+A: My main interests are web development, full-stack development, Python, FastAPI, Flask, React/Next.js, databases, machine learning, generative AI, RAG systems, and integrating AI into web applications.
 
-**Q: Which backend technologies do you use?**  
-A: I use Python with FastAPI and Flask, REST API design, SQLAlchemy, and Pydantic.
-
-**Q: Which databases have you worked with?**  
-A: I have worked with Supabase (PostgreSQL), serverless Neon PostgreSQL, and pgvector for vector search.
+**Q: Which programming languages do you use?**  
+A: I primarily work with Python and JavaScript/TypeScript. I also have experience with C++ from my university coursework.
 
 **Q: Do you have experience with automation tools?**  
 A: Yes, I have worked on n8n projects for workflow and pipeline automation.

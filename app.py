@@ -1,11 +1,9 @@
 """
-app.py - Clean, Professional Gradio Web Application for Shahrina Khan's AI Digital Clone.
-
-Design:
-- Collapsible Sidebar with Retrieval Settings & Profile Info.
-- Clean, focused Chat & Answer interface.
-- Visible AI Clone Disclaimer Banner (Rubric Criterion 5).
-- Expandable Retrieved Chunks & Score Inspector.
+app.py - Shahrina Khan's AI Digital Clone
+Two-column layout matching the reference design:
+  LEFT  : question box + retrieval controls + LLM picker + answer
+  RIGHT : same-question three-mode comparison + clickable example chips
+  BOTTOM: retrieved chunks table
 """
 
 from __future__ import annotations
@@ -26,401 +24,505 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from rank_bm25 import BM25Okapi
 import gradio as gr
-from huggingface_hub import InferenceClient
 
-# Try loading .env locally
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
+try:
+    from mistralai import Mistral
+    _mistral_available = True
+except ImportError:
+    _mistral_available = False
+
+# ── Persona Prompt ───────────────────────────────────────────────────────────
 SYSTEM_PERSONA_PROMPT = """You are the AI clone of Shahrina Khan, a final-year BS Computer Science student at UMT Sialkot (Session 2023-2027).
 Speak in the first person ("I", "my", "me"), in a natural, polite, and authentic tone.
 
 Rules:
 1. Answer ONLY using the CONTEXT provided below. It comes directly from my own documents.
-2. If the context does not contain enough information to answer the question, say: "I don't have that in my notes." Do not guess or invent facts about me.
-3. Never share phone numbers, home addresses, CNIC, passwords, or sensitive details.
-4. If asked whether you are the real person, clearly state that you are an AI clone of Shahrina Khan, not the real person.
-5. Keep your response direct, clear, and faithful to the source context."""
+2. If the context does not contain enough information to answer, say exactly: "I don't have that in my notes."
+3. Never share phone numbers, home addresses, CNIC, or passwords.
+4. If asked whether you are the real person, say you are an AI clone of Shahrina Khan, not the real person.
+5. Keep your response direct, clear, and under 150 words."""
 
+# Available Mistral models for the dropdown
+MISTRAL_MODELS = [
+    "mistral-small-latest",
+    "mistral-medium-latest",
+    "open-mistral-7b",
+    "open-mixtral-8x7b",
+]
 
+# ── Tokenizer ─────────────────────────────────────────────────────────────────
 def tokenize(text: str) -> List[str]:
-    """Lowercase alphanumeric word tokenization."""
     return re.findall(r"\w+", text.lower())
 
 
+# ── RAG Engine ────────────────────────────────────────────────────────────────
 class CloneEngine:
-    """Core RAG engine managing BM25, dense embeddings, RRF hybrid fusion, and generation."""
-
     def __init__(self) -> None:
         self.chunks: List[Dict[str, Any]] = []
         self.embeddings: np.ndarray | None = None
         self.bm25: BM25Okapi | None = None
         self.dense_model = None
-        self.model_name = os.environ.get(
-            "HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct"
-        )
-        hf_token = os.environ.get("HF_TOKEN")
-        self.inference_client = InferenceClient(token=hf_token) if hf_token else None
-
+        self.mistral_api_key = os.environ.get("MISTRAL_API_KEY")
+        self._mistral_clients: Dict[str, Any] = {}   # cache per model
         self._load_knowledge()
 
+    def _get_client(self, model: str):
+        if not _mistral_available or not self.mistral_api_key:
+            return None
+        if model not in self._mistral_clients:
+            self._mistral_clients[model] = Mistral(api_key=self.mistral_api_key)
+        return self._mistral_clients[model]
+
     def _load_knowledge(self) -> None:
-        # 1. Load Chunks
         chunks_file = Path("chunks.json")
         if chunks_file.exists():
             with open(chunks_file, "r", encoding="utf-8") as f:
                 self.chunks = json.load(f)
         else:
             from src.chunking import load_and_chunk_documents
-            self.chunks = [c.to_dict() for c in load_and_chunk_documents("data")]
+            objs = load_and_chunk_documents("data", chunk_size=250, overlap=50)
+            self.chunks = [c.to_dict() for c in objs]
+            with open(chunks_file, "w", encoding="utf-8") as f:
+                json.dump(self.chunks, f, ensure_ascii=False, indent=2)
 
-        # 2. Build BM25
         tokenized_corpus = [tokenize(c["text"]) for c in self.chunks]
         self.bm25 = BM25Okapi(tokenized_corpus)
 
-        # 3. Load Embeddings
-        embeddings_file = Path("embeddings.npy")
-        if embeddings_file.exists():
-            self.embeddings = np.load(embeddings_file)
+        emb_file = Path("embeddings.npy")
+        if emb_file.exists():
+            loaded = np.load(emb_file)
+            if len(loaded) == len(self.chunks):
+                self.embeddings = loaded
 
-        # 4. Optional local sentence-transformers loader
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.dense_model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
-        except Exception:
-            self.dense_model = None
+        if self.embeddings is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                m = SentenceTransformer("all-MiniLM-L6-v2")
+                vecs = m.encode([c["text"] for c in self.chunks],
+                                normalize_embeddings=True, show_progress_bar=False)
+                self.embeddings = np.array(vecs, dtype=np.float32)
+                np.save(emb_file, self.embeddings)
+                self.dense_model = m
+            except Exception as e:
+                print(f"[CloneEngine] embeddings failed: {e}")
 
-    def _get_query_embedding(self, query: str) -> np.ndarray:
+        if self.dense_model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                try:
+                    self.dense_model = SentenceTransformer("all-MiniLM-L6-v2",
+                                                           local_files_only=True)
+                except Exception:
+                    self.dense_model = SentenceTransformer("all-MiniLM-L6-v2")
+            except Exception:
+                pass
+
+    # ── Retrieval ─────────────────────────────────────────────────────────────
+    def _query_vec(self, query: str) -> np.ndarray:
         if self.dense_model is not None:
-            vec = self.dense_model.encode(query, normalize_embeddings=True)
-            return np.array(vec, dtype=np.float32)
-
-        q_tokens = set(tokenize(query))
-        weights = np.zeros(len(self.chunks), dtype=np.float32)
+            v = self.dense_model.encode(query, normalize_embeddings=True)
+            return np.array(v, dtype=np.float32)
+        # TF-IDF-style fallback
+        q = set(tokenize(query))
+        w = np.zeros(len(self.chunks), dtype=np.float32)
         for i, c in enumerate(self.chunks):
-            c_tokens = set(tokenize(c["text"]))
-            overlap = len(q_tokens.intersection(c_tokens))
-            weights[i] = overlap / max(len(q_tokens), 1)
-
-        if np.all(weights == 0):
+            w[i] = len(q & set(tokenize(c["text"]))) / max(len(q), 1)
+        if np.all(w == 0):
             return np.zeros(self.embeddings.shape[1], dtype=np.float32)
+        v = np.dot(w, self.embeddings)
+        n = np.linalg.norm(v)
+        return v / n if n > 0 else v
 
-        pseudo_vec = np.dot(weights, self.embeddings)
-        norm = np.linalg.norm(pseudo_vec)
-        if norm > 0:
-            pseudo_vec = pseudo_vec / norm
-        return pseudo_vec
-
-    def retrieve(self, query: str, mode: str = "Hybrid", top_k: int = 3) -> List[Dict[str, Any]]:
-        q_tokens = tokenize(query)
-        if not q_tokens:
+    def retrieve(self, query: str, mode: str = "Hybrid (RRF)",
+                 top_k: int = 3) -> List[Dict[str, Any]]:
+        q_tok = tokenize(query)
+        if not q_tok:
             return []
-
         top_k = int(top_k)
-        candidate_n = max(top_k * 3, 15)
+        pool = max(top_k * 4, 20)
 
-        bm25_scores = self.bm25.get_scores(q_tokens)
-        bm25_ranked_indices = np.argsort(bm25_scores)[::-1][:candidate_n]
+        bm25_scores = self.bm25.get_scores(q_tok)
+        bm25_idx = np.argsort(bm25_scores)[::-1][:pool]
 
         if self.embeddings is not None:
-            q_vec = self._get_query_embedding(query)
-            dense_scores = np.dot(self.embeddings, q_vec)
-            dense_ranked_indices = np.argsort(dense_scores)[::-1][:candidate_n]
+            qv = self._query_vec(query)
+            dense_scores = np.dot(self.embeddings, qv)
+            dense_idx = np.argsort(dense_scores)[::-1][:pool]
         else:
             dense_scores = bm25_scores
-            dense_ranked_indices = bm25_ranked_indices
+            dense_idx = bm25_idx
 
-        norm_mode = mode.strip().lower()
+        m = mode.strip().lower()
 
-        if "bm25" in norm_mode:
-            results = []
-            for rank, idx in enumerate(bm25_ranked_indices[:top_k], start=1):
-                chunk = dict(self.chunks[idx])
-                chunk["score"] = float(bm25_scores[idx])
-                chunk["rank"] = rank
-                chunk["retriever"] = "BM25"
-                results.append(chunk)
-            return results
+        if "bm25" in m:
+            return [
+                {**self.chunks[i], "score": float(bm25_scores[i]),
+                 "rank": r, "retriever": "BM25"}
+                for r, i in enumerate(bm25_idx[:top_k], 1)
+            ]
+        if "dense" in m:
+            return [
+                {**self.chunks[i], "score": float(dense_scores[i]),
+                 "rank": r, "retriever": "Dense"}
+                for r, i in enumerate(dense_idx[:top_k], 1)
+            ]
 
-        if "dense" in norm_mode:
-            results = []
-            for rank, idx in enumerate(dense_ranked_indices[:top_k], start=1):
-                chunk = dict(self.chunks[idx])
-                chunk["score"] = float(dense_scores[idx])
-                chunk["rank"] = rank
-                chunk["retriever"] = "Dense"
-                results.append(chunk)
-            return results
+        # Hybrid RRF
+        rrf: Dict[int, float] = {}
+        for r, i in enumerate(bm25_idx, 1):
+            rrf[i] = rrf.get(i, 0.0) + 1.0 / (60 + r)
+        for r, i in enumerate(dense_idx, 1):
+            rrf[i] = rrf.get(i, 0.0) + 1.0 / (60 + r)
+        top = sorted(rrf, key=lambda x: rrf[x], reverse=True)[:top_k]
+        return [
+            {**self.chunks[i], "score": float(rrf[i]),
+             "rank": r, "retriever": "Hybrid (RRF)"}
+            for r, i in enumerate(top, 1)
+        ]
 
-        # Hybrid RRF: sum of 1 / (60 + rank)
-        rrf_scores: Dict[int, float] = {}
-        for rank, idx in enumerate(bm25_ranked_indices, start=1):
-            rrf_scores[idx] = rrf_scores.get(idx, 0.0) + (1.0 / (60 + rank))
-
-        for rank, idx in enumerate(dense_ranked_indices, start=1):
-            rrf_scores[idx] = rrf_scores.get(idx, 0.0) + (1.0 / (60 + rank))
-
-        sorted_indices = sorted(rrf_scores.keys(), key=lambda i: rrf_scores[i], reverse=True)[:top_k]
-
-        results = []
-        for rank, idx in enumerate(sorted_indices, start=1):
-            chunk = dict(self.chunks[idx])
-            chunk["score"] = float(rrf_scores[idx])
-            chunk["rank"] = rank
-            chunk["retriever"] = "Hybrid (RRF)"
-            results.append(chunk)
-        return results
-
-    def generate(self, query: str, chunks: List[Dict[str, Any]]) -> str:
-        """Generate a grounded answer or extract a concise answer from notes."""
+    # ── Generation ────────────────────────────────────────────────────────────
+    def generate(self, query: str, chunks: List[Dict[str, Any]],
+                 model: str = "mistral-small-latest") -> Tuple[str, str]:
+        """Returns (answer, generated_by_label)."""
         if not chunks:
-            return "I don't have that in my notes."
+            return "I don't have that in my notes.", "—"
 
         context = "\n\n---\n\n".join(
-            f"[Source: {chunk['source']} | Chunk: {chunk['chunk_id']}]\n{chunk['text']}"
-            for chunk in chunks
+            f"[Source: {c['source']} | {c['chunk_id']}]\n{c['text']}"
+            for c in chunks
         )
-        notice = ""
-        if self.inference_client is not None:
+        client = self._get_client(model)
+
+        if client is not None:
             try:
-                response = self.inference_client.chat.completions.create(
-                    model=self.model_name,
+                resp = client.chat.complete(
+                    model=model,
                     messages=[
                         {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
-                        {
-                            "role": "user",
-                            "content": (
-                                f"CONTEXT:\n{context}\n\nQUESTION:\n{query}\n\n"
-                                "Answer in first person using only the context above:"
-                            ),
-                        },
+                        {"role": "user", "content":
+                            f"CONTEXT:\n{context}\n\nQUESTION:\n{query}\n\n"
+                            "Answer in first person using only the context above:"},
                     ],
                     temperature=0.2,
-                    max_tokens=300,
+                    max_tokens=350,
                 )
-                answer = response.choices[0].message.content
-                if isinstance(answer, str) and answer.strip():
-                    return answer.strip()
-                raise RuntimeError("The inference API returned an empty answer.")
+                ans = resp.choices[0].message.content
+                if isinstance(ans, str) and ans.strip():
+                    return ans.strip(), f"Mistral · `{model}`"
             except Exception as exc:
-                print(f"[CloneEngine] Hugging Face generation failed: {exc}")
-                notice = (
-                    f"⚠️ AI generation failed ({type(exc).__name__}); "
-                    "showing an answer extracted from retrieved notes.\n\n"
+                print(f"[CloneEngine] Mistral error: {exc}")
+                return (
+                    f"⚠️ Generation failed ({type(exc).__name__}). "
+                    "Check your API key or try again shortly.\n\n"
+                    + self._fallback_extract(query, chunks),
+                    f"Fallback (error: {type(exc).__name__})"
                 )
-        else:
-            notice = (
-                "⚠️ `HF_TOKEN` is not configured; showing an answer extracted "
-                "from retrieved notes.\n\n"
-            )
 
-        query_tokens = {"your" if token == "ur" else token for token in tokenize(query)}
-        qa_matches = []
-        for chunk in chunks:
-            pairs = re.findall(
+        # No key configured — extract answer from chunks
+        return self._fallback_extract(query, chunks), "Fallback (no API key)"
+
+    def _fallback_extract(self, query: str, chunks: List[Dict[str, Any]]) -> str:
+        q_tok = {"your" if t == "ur" else t for t in tokenize(query)}
+        qa = []
+        for ch in chunks:
+            for q_text, a_text in re.findall(
                 r"\*\*Q:\s*(.*?)\?\*\*\s*A:\s*(.*?)(?=\*\*Q:|\Z)",
-                chunk["text"],
-                flags=re.DOTALL,
-            )
-            for question, answer in pairs:
-                question_tokens = {
-                    "your" if token == "ur" else token
-                    for token in tokenize(question)
-                }
-                overlap = len(query_tokens.intersection(question_tokens))
-                if overlap:
-                    qa_matches.append((overlap, answer.strip()))
+                ch["text"], flags=re.DOTALL
+            ):
+                ov = len(q_tok & {"your" if t == "ur" else t
+                                  for t in tokenize(q_text)})
+                if ov:
+                    qa.append((ov, a_text.strip()))
+        if qa:
+            best_ov, best_a = max(qa, key=lambda x: x[0])
+            if best_ov >= min(2, len(q_tok)):
+                return best_a
 
-        if qa_matches:
-            best_overlap, best_answer = max(qa_matches, key=lambda match: match[0])
-            if best_overlap >= min(2, len(query_tokens)):
-                return notice + best_answer
-
-        sentence_matches = []
-        for chunk in chunks:
-            text = re.sub(r"^#+\s*", "", chunk["text"].strip())
-            for sentence in re.split(r"(?<=[.!?])\s+", text):
-                sentence = sentence.strip()
-                overlap = len(query_tokens.intersection(set(tokenize(sentence))))
-                if sentence and overlap:
-                    sentence_matches.append((overlap, sentence))
-
-        if sentence_matches:
-            _, answer = max(sentence_matches, key=lambda match: match[0])
-            return notice + answer
-
-        return notice + "I don't have that in my notes."
+        sents = []
+        for ch in chunks:
+            for s in re.split(r"(?<=[.!?])\s+",
+                              re.sub(r"^#+\s*", "", ch["text"].strip())):
+                ov = len(q_tok & set(tokenize(s)))
+                if s and ov:
+                    sents.append((ov, s.strip()))
+        if sents:
+            return max(sents, key=lambda x: x[0])[1]
+        return "I don't have that in my notes."
 
 
 engine = CloneEngine()
 
 
-def format_chunks_markdown(chunks: List[Dict[str, Any]]) -> str:
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _chunks_table(chunks: List[Dict[str, Any]]) -> str:
     if not chunks:
-        return "*No relevant passages retrieved for this query.*"
-
-    cards = []
+        return "*Nothing retrieved yet.*"
+    rows = []
     for c in chunks:
-        cards.append(
-            f"**Rank #{c['rank']}** — `{c['retriever']}` (Score: `{c['score']:.4f}`)\n"
-            f"- **Source:** `{c['source']}` | **ID:** `{c['chunk_id']}`\n"
-            f"> {c['text']}\n"
+        rows.append(
+            f"**#{c['rank']}** &nbsp;`{c['source']}` &nbsp;·&nbsp; "
+            f"`{c['chunk_id']}` &nbsp;·&nbsp; "
+            f"score `{c['score']:.4f}` &nbsp;·&nbsp; {c['retriever']}\n\n"
+            f"> {c['text'][:220].strip()}{'…' if len(c['text']) > 220 else ''}"
         )
-    return "\n---\n".join(cards)
+    return "\n\n---\n\n".join(rows)
 
 
-def handle_query(query: str, mode: str, top_k: int) -> Tuple[str, str]:
-    cleaned = query.strip()
-    if not cleaned:
-        return "Please type a question to ask my digital clone.", "*No query entered.*"
-
-    retrieved = engine.retrieve(cleaned, mode=mode, top_k=top_k)
-    answer = engine.generate(cleaned, retrieved)
-    inspector = format_chunks_markdown(retrieved)
-
-    return answer, inspector
-
-
-def clear_stale_results() -> Tuple[str, str]:
-    return "*Submit your question to get an answer.*", "*No passages retrieved yet.*"
+def _compare_modes(query: str, top_k: int) -> str:
+    if not query.strip():
+        return "*Enter a question on the left to compare modes.*"
+    out = []
+    for mode in ("BM25 only", "Dense only", "Hybrid (RRF)"):
+        chunks = engine.retrieve(query, mode=mode, top_k=top_k)
+        ids = ", ".join(f"`{c['chunk_id']}`" for c in chunks) or "—"
+        out.append(f"**{mode}:** {ids}")
+    return "\n\n".join(out)
 
 
-if _spaces is not None:
-    handle_query = _spaces.GPU(handle_query)
+# ── Main query handler ────────────────────────────────────────────────────────
+def handle_query(
+    query: str, mode: str, top_k: int, model: str
+) -> Tuple[str, str, str, str]:
+    """Returns: answer, generated_by, chunks_md, compare_md"""
+    q = query.strip()
+    if not q:
+        return (
+            "*Please enter a question.*",
+            "—",
+            "*Nothing retrieved yet.*",
+            "*Enter a question to compare modes.*",
+        )
+    chunks = engine.retrieve(q, mode=mode, top_k=top_k)
+    answer, gen_by = engine.generate(q, chunks, model=model)
+    chunks_md = _chunks_table(chunks)
+    compare_md = _compare_modes(q, top_k)
+    return answer, f"Generated by — {gen_by}", chunks_md, compare_md
 
 
-# Custom clean & professional theme
-professional_theme = gr.themes.Soft(
+def set_example(q: str) -> str:
+    return q
+
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+EXAMPLES = [
+    "Where are you from and what are you studying?",
+    "What is DeadlineOS and what problem does it solve?",
+    "What advice would you give to a fresher joining computer science?",
+    "How do you handle bugs or unexpected errors in code?",
+    "What is Verdade and what accuracy did it achieve?",
+    "Do you like cooking? What do you enjoy making?",
+    "What is Arbitrix and how does it work?",
+    "Do you like travelling? Where do you like to go?",
+    "What are your future goals?",
+    "Are you the real Shahrina?",
+]
+
+css = """
+/* ── Global ── */
+body, .gradio-container { font-family: 'Inter', sans-serif !important; }
+
+/* ── Banner ── */
+#banner {
+    background: #1c1c1e;
+    color: #f5c518;
+    border-left: 5px solid #f5c518;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 0.88rem;
+    margin-bottom: 4px;
+}
+
+/* ── Title area ── */
+#title-area { margin-bottom: 12px; }
+#title-area h1 { font-size: 1.6rem; margin-bottom: 2px; }
+#title-area p  { color: #666; font-size: 0.88rem; margin: 0; }
+
+/* ── Left card ── */
+#left-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 18px;
+}
+
+/* ── Answer box ── */
+#answer-box {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 14px;
+    min-height: 80px;
+    font-size: 0.95rem;
+}
+
+/* ── Generated-by label ── */
+#gen-by { color: #9ca3af; font-size: 0.78rem; margin-top: 4px; }
+
+/* ── Right card ── */
+#right-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 18px;
+}
+
+/* ── Example chips ── */
+.example-chip button, .example-chip {
+    background: #f3f4f6 !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 20px !important;
+    padding: 4px 14px !important;
+    font-size: 0.82rem !important;
+    cursor: pointer;
+    color: #374151 !important;
+    margin: 3px 2px !important;
+    transition: background 0.15s;
+}
+.example-chip button:hover {
+    background: #e5e7eb !important;
+}
+
+/* ── Chunks section ── */
+#chunks-section {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 12px;
+}
+
+/* ── Radio inline ── */
+.retrieval-radio label { font-size: 0.88rem; }
+
+/* ── Ask button ── */
+#ask-btn { margin-top: 8px; }
+"""
+
+_theme = gr.themes.Soft(
     primary_hue="slate",
     secondary_hue="blue",
     neutral_hue="slate",
-    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
+    font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
 )
 
 with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
-    # ------------------ SIDEBAR (Settings & Profile) ------------------
-    with gr.Sidebar(open=True):
-        gr.Markdown(
-            """
-            ### 👤 Shahrina Khan
-            **BSCS Student @ UMT Sialkot**<br>
-            *Web Developer & Applied AI Enthusiast*
 
-            ---
-            """
-        )
-
-        gr.Markdown("#### ⚙️ Retrieval Settings")
-        mode_choice = gr.Radio(
-            choices=["Hybrid", "BM25 only", "Dense only"],
-            value="Hybrid",
-            label="Retrieval Mode",
-            info="Choose search strategy",
-        )
-        top_k_slider = gr.Slider(
-            minimum=1,
-            maximum=5,
-            value=3,
-            step=1,
-            label="Passages to Retrieve (Top-K)",
-        )
-
-        gr.Markdown(
-            """
-            ---
-            #### 📊 System Overview
-            - **RAG Architecture:** Hybrid (BM25 + Dense)
-            - **Fusion Method:** Reciprocal Rank Fusion (RRF)
-            - **Embedding Model:** `all-MiniLM-L6-v2`
-            - **Knowledge Base:** 9 docs (~6,800 words)
-            """
-        )
-
-        clear_btn = gr.Button("Clear Chat", variant="secondary", size="sm")
-
-    # ------------------ MAIN CONTENT AREA ------------------
-    # Mandatory AI Clone Banner (Rubric Criterion 5)
-    gr.Markdown(
-        """
-        <div style="background-color: #fefce8; border: 1px solid #fef08a; border-left: 5px solid #eab308; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;">
-            <strong style="color: #854d0e; font-size: 0.95rem;">
-                ⚠️ AI Clone Notice: This is an AI clone, not the real person.
-            </strong>
-            <p style="margin: 4px 0 0 0; color: #713f12; font-size: 0.88rem;">
-                Answers are generated strictly from Shahrina Khan's verified academic background, projects (<strong>DeadlineOS</strong>, <strong>Verdade</strong>), and technical notes.
-            </p>
-        </div>
-        """
+    # ── Banner ────────────────────────────────────────────────────────────────
+    gr.HTML(
+        '<div id="banner">'
+        '⚠️ &nbsp;<strong>This is an AI clone, not the real person. '
+        "It answers only from Shahrina Khan's own notes and can make mistakes."
+        "</strong></div>"
     )
 
-    gr.Markdown(
-        """
-        # Chat with Shahrina's AI Clone
-        Ask me about my degree at UMT Sialkot, projects, developer stack, study habits, cooking recipes, or travels in northern Pakistan.
-        """
+    # ── Title ─────────────────────────────────────────────────────────────────
+    gr.HTML(
+        '<div id="title-area">'
+        "<h1>🤖 Chat with Shahrina's digital clone</h1>"
+        "<p>BS Computer Science (7th semester), UMT Sialkot · web dev &amp; applied AI. "
+        "Ask about my studies, projects, skills, hobbies or opinions.</p>"
+        "</div>"
     )
 
-    query_box = gr.Textbox(
-        label="",
-        placeholder="Type a question here and press Enter (e.g., What is DeadlineOS and what problem does it solve?)...",
-        lines=2,
-    )
+    # ── Two-column body ───────────────────────────────────────────────────────
+    with gr.Row(equal_height=False):
 
+        # ── LEFT column ───────────────────────────────────────────────────────
+        with gr.Column(scale=6, elem_id="left-card"):
+            gr.Markdown("**Your question**")
+            query_box = gr.Textbox(
+                label="",
+                placeholder="e.g. from where did you get education",
+                lines=2,
+                show_label=False,
+            )
+
+            mode_radio = gr.Radio(
+                choices=["Hybrid (RRF)", "BM25 only", "Dense only"],
+                value="Hybrid (RRF)",
+                label="Retrieval mode:",
+                elem_classes=["retrieval-radio"],
+            )
+
+            with gr.Row():
+                top_k_slider = gr.Slider(
+                    minimum=1, maximum=5, value=3, step=1,
+                    label="Top-k chunks:",
+                    scale=4,
+                )
+
+            model_dropdown = gr.Dropdown(
+                choices=MISTRAL_MODELS,
+                value="mistral-small-latest",
+                label="LLM:",
+                interactive=True,
+            )
+
+            ask_btn = gr.Button(
+                "Ask Shahrina's clone", variant="primary",
+                elem_id="ask-btn",
+            )
+
+            gr.Markdown("**Answer**")
+            answer_box = gr.Markdown(
+                value="*Your answer will appear here.*",
+                elem_id="answer-box",
+            )
+            gen_by_box = gr.Markdown(
+                value="Generated by — ",
+                elem_id="gen-by",
+            )
+
+        # ── RIGHT column ──────────────────────────────────────────────────────
+        with gr.Column(scale=4, elem_id="right-card"):
+            gr.Markdown(
+                "**Same question, all three modes**\n\n"
+                "Ask a question to compare the top-k chunk IDs from BM25, "
+                "dense and hybrid retrieval."
+            )
+            compare_box = gr.Markdown(
+                value="*Ask a question to compare modes.*"
+            )
+
+            gr.HTML("<hr style='margin:14px 0; border-color:#e5e7eb'>")
+            gr.Markdown("**Try an example**")
+
+            # Clickable example chips
+            with gr.Column():
+                for ex in EXAMPLES:
+                    btn = gr.Button(
+                        ex, size="sm", elem_classes=["example-chip"],
+                        variant="secondary",
+                    )
+                    btn.click(
+                        fn=set_example,
+                        inputs=[gr.State(ex)],
+                        outputs=[query_box],
+                    )
+
+    # ── Retrieved chunks (full width, below both columns) ─────────────────────
     with gr.Row():
-        ask_btn = gr.Button("Ask Question", variant="primary", scale=2)
+        with gr.Column(elem_id="chunks-section"):
+            gr.Markdown("### Retrieved chunks (source, chunk ID and scores)")
+            chunks_box = gr.Markdown(value="*Nothing retrieved yet.*")
 
-    gr.Markdown("#### 💬 Clone Response")
-    answer_box = gr.Markdown(
-        value="*Your answer will appear here.*"
-    )
-
-    with gr.Accordion("🔍 Retrieved Chunks & Score Inspector", open=False):
-        gr.Markdown("*Inspect the exact source passages and similarity scores used to ground the answer:*")
-        inspector_box = gr.Markdown(value="*No passages retrieved yet.*")
-
-    query_box.input(
-        fn=clear_stale_results,
-        inputs=[],
-        outputs=[answer_box, inspector_box],
-    )
-
-    gr.Markdown("#### 💡 Example Questions")
-    example_question = gr.Dropdown(
-        choices=[
-            "What is schedule density blindness in DeadlineOS?",
-            "What dataset and evaluation results did Verdade achieve?",
-            "How do you enjoy your downtime preparing tasty dishes?",
-            "What are your main technical skills and frontend tools?",
-            "What advice would you give to a junior computer science student?",
-        ],
-        label="Choose a question to try",
-        interactive=True,
-    )
-    example_question.change(
-        fn=lambda question: question or "",
-        inputs=[example_question],
-        outputs=[query_box],
-    )
-
-    # Wire event handlers
+    # ── Wire handlers ─────────────────────────────────────────────────────────
     ask_btn.click(
         fn=handle_query,
-        inputs=[query_box, mode_choice, top_k_slider],
-        outputs=[answer_box, inspector_box],
+        inputs=[query_box, mode_radio, top_k_slider, model_dropdown],
+        outputs=[answer_box, gen_by_box, chunks_box, compare_box],
     )
     query_box.submit(
         fn=handle_query,
-        inputs=[query_box, mode_choice, top_k_slider],
-        outputs=[answer_box, inspector_box],
-    )
-    clear_btn.click(
-        fn=lambda: ("", "*Your answer will appear here.*", "*No passages retrieved yet.*"),
-        inputs=[],
-        outputs=[query_box, answer_box, inspector_box],
+        inputs=[query_box, mode_radio, top_k_slider, model_dropdown],
+        outputs=[answer_box, gen_by_box, chunks_box, compare_box],
     )
 
 if __name__ == "__main__":
-    demo.launch(theme=professional_theme)
+    demo.launch(theme=_theme, css=css)

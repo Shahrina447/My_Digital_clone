@@ -4,3 +4,4 @@ sentence-transformers==6.2.0
 numpy==2.5.4
 huggingface_hub==2.4.0
 python-dotenv==1.2.4
+mistralai==1.8.2
