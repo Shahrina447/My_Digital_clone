@@ -8,13 +8,6 @@ Two-column layout matching the reference design:
 
 from __future__ import annotations
 
-try:
-    import spaces as _spaces
-except ModuleNotFoundError as exc:
-    if exc.name != "spaces":
-        raise
-    _spaces = None
-
 import json
 import os
 import re

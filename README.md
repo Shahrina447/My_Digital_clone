@@ -24,7 +24,7 @@ license: mit
 
 ## 1. Knowledge Base Description & Rationale
 
-For this digital clone, I curated a comprehensive 9-document knowledge base (~6,800 words / ~24 standard pages) written strictly in Markdown (`.md`), completely avoiding sensitive personal information (such as CNIC, passwords, or street addresses).
+For this digital clone, I curated a comprehensive 8-document knowledge base (~6,200 words) written strictly in Markdown (`.md`), completely avoiding sensitive personal information (such as CNIC, passwords, or street addresses).
 
 ### Documents Included:
 1. **`bio.md` (Factual Background):** Detailed academic trajectory, early education in Daska (1029 matric marks), KIPS College (80%), and university studies at UMT Sialkot.
