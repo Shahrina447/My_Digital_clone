@@ -38,6 +38,12 @@ except Exception:
 
 from huggingface_hub import InferenceClient
 
+try:
+    from mistralai import Mistral as _MistralClient
+    _mistral_ok = True
+except ImportError:
+    _mistral_ok = False
+
 # ── Persona Prompt ───────────────────────────────────────────────────────────
 SYSTEM_PERSONA_PROMPT = """You are the AI clone of Shahrina Khan, a final-year BS Computer Science student at UMT Sialkot (Session 2023-2027).
 Speak in the first person ("I", "my", "me"), in a natural, polite, and authentic tone.
@@ -70,14 +76,16 @@ class CloneEngine:
         self.bm25: BM25Okapi | None = None
         self.dense_model = None
         self.hf_token = os.environ.get("HF_TOKEN")
+        self.mistral_key = os.environ.get("MISTRAL_API_KEY")
         self._load_knowledge()
 
     def _get_hf_client(self) -> InferenceClient:
-        """Create a fresh HF InferenceClient each call (safe on ZeroGPU)."""
-        return InferenceClient(
-            provider="hf-inference",
-            token=self.hf_token,
-        )
+        return InferenceClient(provider="hf-inference", token=self.hf_token)
+
+    def _get_mistral_client(self):
+        if _mistral_ok and self.mistral_key:
+            return _MistralClient(api_key=self.mistral_key)
+        return None
 
     def _load_knowledge(self) -> None:
         chunks_file = Path("chunks.json")
@@ -198,7 +206,9 @@ class CloneEngine:
     # ── Generation ────────────────────────────────────────────────────────────
     def generate(self, query: str, chunks: List[Dict[str, Any]],
                  model: str = "meta-llama/Llama-3.2-3B-Instruct") -> Tuple[str, str]:
-        """Returns (answer, generated_by_label)."""
+        """Returns (answer, generated_by_label).
+        Strategy: try Mistral first (reliable), fall back to HF, then text extraction.
+        """
         if not chunks:
             return "I don't have that in my notes.", "—"
 
@@ -206,18 +216,38 @@ class CloneEngine:
             f"[Source: {c['source']} | {c['chunk_id']}]\n{c['text']}"
             for c in chunks
         )
+        user_msg = (
+            f"CONTEXT:\n{context}\n\nQUESTION:\n{query}\n\n"
+            "Answer in first person using only the context above:"
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
+            {"role": "user",   "content": user_msg},
+        ]
 
+        # ── 1. Try Mistral ─────────────────────────────────────────────────
+        mistral = self._get_mistral_client()
+        if mistral is not None:
+            try:
+                resp = mistral.chat.complete(
+                    model="mistral-small-latest",
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=350,
+                )
+                ans = resp.choices[0].message.content
+                if isinstance(ans, str) and ans.strip():
+                    return ans.strip(), "Mistral · `mistral-small-latest`"
+            except Exception as exc:
+                print(f"[CloneEngine] Mistral error: {exc}")
+
+        # ── 2. Try HF Inference API ────────────────────────────────────────
         if self.hf_token:
             try:
                 client = self._get_hf_client()
                 resp = client.chat.completions.create(
                     model=model,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
-                        {"role": "user", "content":
-                            f"CONTEXT:\n{context}\n\nQUESTION:\n{query}\n\n"
-                            "Answer in first person using only the context above:"},
-                    ],
+                    messages=messages,
                     temperature=0.2,
                     max_tokens=350,
                 )
@@ -225,13 +255,10 @@ class CloneEngine:
                 if isinstance(ans, str) and ans.strip():
                     return ans.strip(), f"HF · `{model.split('/')[-1]}`"
             except Exception as exc:
-                print(f"[CloneEngine] HF generation error: {exc}")
-                return (
-                    self._fallback_extract(query, chunks),
-                    f"Fallback (HF error: {type(exc).__name__}: {str(exc)[:60]})"
-                )
+                print(f"[CloneEngine] HF error: {exc}")
 
-        return self._fallback_extract(query, chunks), "Fallback (no HF_TOKEN)"
+        # ── 3. Text extraction fallback ────────────────────────────────────
+        return self._fallback_extract(query, chunks), "Extracted from notes"
 
     def _fallback_extract(self, query: str, chunks: List[Dict[str, Any]]) -> str:
         q_tok = {"your" if t == "ur" else t for t in tokenize(query)}
