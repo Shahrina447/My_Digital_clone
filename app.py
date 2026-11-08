@@ -9,7 +9,16 @@ Two-column layout matching the reference design:
 from __future__ import annotations
 
 # Must be imported FIRST before any ML package (ZeroGPU requirement)
-import spaces
+try:
+    import spaces
+except ImportError:
+    # Local dev — create a no-op stand-in
+    import types, functools
+    def _noop_gpu(fn=None, *, duration=60, **kw):
+        if fn is not None:
+            return fn
+        return lambda f: f
+    spaces = types.SimpleNamespace(GPU=_noop_gpu)
 
 import json
 import os
@@ -330,89 +339,90 @@ EXAMPLES = [
 ]
 
 css = """
-/* ── Global ── */
-body, .gradio-container { font-family: 'Inter', sans-serif !important; }
+/* ─── Reset & base ─────────────────────────────────────── */
+.gradio-container { max-width: 1100px !important; margin: 0 auto !important; }
 
-/* ── Banner ── */
+/* ─── Banner ────────────────────────────────────────────── */
 #banner {
-    background: #1c1c1e;
+    background: #1a1a1a;
     color: #f5c518;
     border-left: 5px solid #f5c518;
-    padding: 10px 16px;
+    padding: 11px 18px;
     border-radius: 6px;
-    font-size: 0.88rem;
-    margin-bottom: 4px;
+    font-size: 0.87rem;
+    font-weight: 500;
+    margin-bottom: 10px;
 }
 
-/* ── Title area ── */
-#title-area { margin-bottom: 12px; }
-#title-area h1 { font-size: 1.6rem; margin-bottom: 2px; }
-#title-area p  { color: #666; font-size: 0.88rem; margin: 0; }
-
-/* ── Left card ── */
-#left-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    padding: 18px;
+/* ─── Cards ─────────────────────────────────────────────── */
+.card {
+    background: var(--background-fill-primary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 12px;
+    padding: 20px;
 }
 
-/* ── Answer box ── */
-#answer-box {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+/* ─── Answer output ─────────────────────────────────────── */
+#answer-out {
+    min-height: 90px;
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
     border-radius: 8px;
-    padding: 14px;
-    min-height: 80px;
+    padding: 14px 16px;
     font-size: 0.95rem;
+    line-height: 1.6;
 }
 
-/* ── Generated-by label ── */
-#gen-by { color: #9ca3af; font-size: 0.78rem; margin-top: 4px; }
+/* ─── Gen-by label ──────────────────────────────────────── */
+#gen-by .prose { color: var(--body-text-color-subdued) !important; font-size: 0.78rem !important; }
 
-/* ── Right card ── */
-#right-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    padding: 18px;
-}
-
-/* ── Example chips ── */
-.example-chip button, .example-chip {
-    background: #f3f4f6 !important;
-    border: 1px solid #d1d5db !important;
+/* ─── Example chip buttons ──────────────────────────────── */
+.chip button {
+    background: var(--background-fill-secondary) !important;
+    border: 1px solid var(--border-color-primary) !important;
     border-radius: 20px !important;
-    padding: 4px 14px !important;
+    padding: 5px 14px !important;
     font-size: 0.82rem !important;
-    cursor: pointer;
-    color: #374151 !important;
-    margin: 3px 2px !important;
-    transition: background 0.15s;
+    text-align: left !important;
+    color: var(--body-text-color) !important;
+    margin: 2px 0 !important;
+    width: 100% !important;
+    transition: background 0.15s, border-color 0.15s;
 }
-.example-chip button:hover {
-    background: #e5e7eb !important;
-}
-
-/* ── Chunks section ── */
-#chunks-section {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    padding: 16px;
-    margin-top: 12px;
+.chip button:hover {
+    border-color: var(--color-accent) !important;
+    background: var(--background-fill-primary) !important;
 }
 
-/* ── Radio inline ── */
-.retrieval-radio label { font-size: 0.88rem; }
+/* ─── Chunks section ────────────────────────────────────── */
+#chunks-out {
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 0.85rem;
+}
 
-/* ── Ask button ── */
-#ask-btn { margin-top: 8px; }
+/* ─── Compare section ───────────────────────────────────── */
+#compare-out {
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 0.85rem;
+    min-height: 60px;
+}
+
+/* ─── Section headings ──────────────────────────────────── */
+.section-head { font-size: 0.8rem !important; font-weight: 600 !important;
+                letter-spacing: 0.04em !important;
+                color: var(--body-text-color-subdued) !important;
+                text-transform: uppercase !important; margin-bottom: 6px !important; }
 """
 
 _theme = gr.themes.Soft(
-    primary_hue="slate",
-    secondary_hue="blue",
+    primary_hue="indigo",
+    secondary_hue="slate",
     neutral_hue="slate",
     font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
 )
@@ -421,30 +431,30 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
 
     # ── Banner ────────────────────────────────────────────────────────────────
     gr.HTML(
-        '<div id="banner">'
-        '⚠️ &nbsp;<strong>This is an AI clone, not the real person. '
+        '<div id="banner">⚠️ &nbsp;'
+        '<strong>This is an AI clone, not the real person. '
         "It answers only from Shahrina Khan's own notes and can make mistakes."
         "</strong></div>"
     )
 
     # ── Title ─────────────────────────────────────────────────────────────────
-    gr.HTML(
-        '<div id="title-area">'
-        "<h1>🤖 Chat with Shahrina's digital clone</h1>"
-        "<p>BS Computer Science (7th semester), UMT Sialkot · web dev &amp; applied AI. "
+    gr.Markdown(
+        "## 🤖 Chat with Shahrina's digital clone\n"
+        "<p style='color:var(--body-text-color-subdued);font-size:0.88rem;margin-top:-6px'>"
+        "BS Computer Science (7th semester), UMT Sialkot · web dev &amp; applied AI. "
         "Ask about my studies, projects, skills, hobbies or opinions.</p>"
-        "</div>"
     )
 
     # ── Two-column body ───────────────────────────────────────────────────────
-    with gr.Row(equal_height=False):
+    with gr.Row(equal_height=False, variant="panel"):
 
-        # ── LEFT column ───────────────────────────────────────────────────────
-        with gr.Column(scale=6, elem_id="left-card"):
+        # ══ LEFT ══════════════════════════════════════════════════════════════
+        with gr.Column(scale=55):
+
             gr.Markdown("**Your question**")
             query_box = gr.Textbox(
                 label="",
-                placeholder="e.g. from where did you get education",
+                placeholder="e.g. Where are you from and what are you studying?",
                 lines=2,
                 show_label=False,
             )
@@ -453,15 +463,12 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
                 choices=["Hybrid (RRF)", "BM25 only", "Dense only"],
                 value="Hybrid (RRF)",
                 label="Retrieval mode:",
-                elem_classes=["retrieval-radio"],
             )
 
-            with gr.Row():
-                top_k_slider = gr.Slider(
-                    minimum=1, maximum=5, value=3, step=1,
-                    label="Top-k chunks:",
-                    scale=4,
-                )
+            top_k_slider = gr.Slider(
+                minimum=1, maximum=5, value=3, step=1,
+                label="Top-k chunks:",
+            )
 
             model_dropdown = gr.Dropdown(
                 choices=MISTRAL_MODELS,
@@ -471,52 +478,46 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
             )
 
             ask_btn = gr.Button(
-                "Ask Shahrina's clone", variant="primary",
-                elem_id="ask-btn",
+                "Ask Shahrina's clone", variant="primary", size="lg",
             )
 
-            gr.Markdown("**Answer**")
+            gr.HTML("<div class='section-head' style='margin-top:14px'>Answer</div>")
             answer_box = gr.Markdown(
-                value="*Your answer will appear here.*",
-                elem_id="answer-box",
+                value="*Your answer will appear here after you ask a question.*",
+                elem_id="answer-out",
             )
             gen_by_box = gr.Markdown(
-                value="Generated by — ",
+                value="",
                 elem_id="gen-by",
             )
 
-        # ── RIGHT column ──────────────────────────────────────────────────────
-        with gr.Column(scale=4, elem_id="right-card"):
+        # ══ RIGHT ═════════════════════════════════════════════════════════════
+        with gr.Column(scale=45):
+
+            gr.HTML("<div class='section-head'>Same question, all three modes</div>")
             gr.Markdown(
-                "**Same question, all three modes**\n\n"
+                "<span style='font-size:0.82rem;color:var(--body-text-color-subdued)'>"
                 "Ask a question to compare the top-k chunk IDs from BM25, "
-                "dense and hybrid retrieval."
+                "dense and hybrid retrieval.</span>",
             )
             compare_box = gr.Markdown(
-                value="*Ask a question to compare modes.*"
+                value="",
+                elem_id="compare-out",
             )
 
-            gr.HTML("<hr style='margin:14px 0; border-color:#e5e7eb'>")
-            gr.Markdown("**Try an example**")
+            gr.HTML("<hr style='margin:16px 0;opacity:0.2'>")
+            gr.HTML("<div class='section-head'>Try an example</div>")
 
-            # Clickable example chips
-            with gr.Column():
-                for ex in EXAMPLES:
-                    btn = gr.Button(
-                        ex, size="sm", elem_classes=["example-chip"],
-                        variant="secondary",
-                    )
-                    btn.click(
-                        fn=set_example,
-                        inputs=[gr.State(ex)],
-                        outputs=[query_box],
-                    )
+            for ex in EXAMPLES:
+                btn = gr.Button(ex, size="sm", elem_classes=["chip"], variant="secondary")
+                btn.click(fn=lambda q=ex: q, inputs=[], outputs=[query_box])
 
-    # ── Retrieved chunks (full width, below both columns) ─────────────────────
-    with gr.Row():
-        with gr.Column(elem_id="chunks-section"):
-            gr.Markdown("### Retrieved chunks (source, chunk ID and scores)")
-            chunks_box = gr.Markdown(value="*Nothing retrieved yet.*")
+    # ── Retrieved chunks (full-width below) ───────────────────────────────────
+    gr.HTML("<div class='section-head' style='margin-top:16px'>Retrieved chunks (source, chunk ID and scores)</div>")
+    chunks_box = gr.Markdown(
+        value="",
+        elem_id="chunks-out",
+    )
 
     # ── Wire handlers ─────────────────────────────────────────────────────────
     ask_btn.click(
