@@ -8,6 +8,9 @@ Two-column layout matching the reference design:
 
 from __future__ import annotations
 
+# Must be imported FIRST before any ML package (ZeroGPU requirement)
+import spaces
+
 import json
 import os
 import re
@@ -288,6 +291,7 @@ def _compare_modes(query: str, top_k: int) -> str:
 
 
 # ── Main query handler ────────────────────────────────────────────────────────
+@spaces.GPU(duration=60)
 def handle_query(
     query: str, mode: str, top_k: int, model: str
 ) -> Tuple[str, str, str, str]:
