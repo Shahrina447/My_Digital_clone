@@ -388,15 +388,21 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
     )
 
     gr.Markdown("#### 💡 Example Questions")
-    gr.Examples(
-        examples=[
-            ["What is schedule density blindness in DeadlineOS?", "Hybrid", 3],
-            ["What dataset and evaluation results did Verdade achieve?", "Hybrid", 3],
-            ["How do you enjoy your downtime preparing tasty dishes?", "Dense only", 3],
-            ["What are your main technical skills and frontend tools?", "BM25 only", 3],
-            ["What advice would you give to a junior computer science student?", "Hybrid", 3],
+    example_question = gr.Dropdown(
+        choices=[
+            "What is schedule density blindness in DeadlineOS?",
+            "What dataset and evaluation results did Verdade achieve?",
+            "How do you enjoy your downtime preparing tasty dishes?",
+            "What are your main technical skills and frontend tools?",
+            "What advice would you give to a junior computer science student?",
         ],
-        inputs=[query_box, mode_choice, top_k_slider],
+        label="Choose a question to try",
+        interactive=True,
+    )
+    example_question.change(
+        fn=lambda question: question or "",
+        inputs=[example_question],
+        outputs=[query_box],
     )
 
     # Wire event handlers
