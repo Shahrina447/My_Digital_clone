@@ -49,12 +49,12 @@ Rules:
 4. If asked whether you are the real person, say you are an AI clone of Shahrina Khan, not the real person.
 5. Keep your response direct, clear, and under 150 words."""
 
-# Available HF models for the dropdown
+# Free HF Inference API models (no Pro subscription needed)
 HF_MODELS = [
-    "meta-llama/Llama-3.2-3B-Instruct",
-    "meta-llama/Llama-3.1-8B-Instruct",
+    "HuggingFaceH4/zephyr-7b-beta",
     "mistralai/Mistral-7B-Instruct-v0.3",
-    "Qwen/Qwen2.5-7B-Instruct",
+    "microsoft/Phi-3-mini-4k-instruct",
+    "google/gemma-2-2b-it",
 ]
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ class CloneEngine:
 
     # ── Generation ────────────────────────────────────────────────────────────
     def generate(self, query: str, chunks: List[Dict[str, Any]],
-                 model: str = "meta-llama/Llama-3.2-3B-Instruct") -> Tuple[str, str]:
+                 model: str = "HuggingFaceH4/zephyr-7b-beta") -> Tuple[str, str]:
         """Returns (answer, generated_by_label)."""
         if not chunks:
             return "I don't have that in my notes.", "—"
@@ -225,7 +225,7 @@ class CloneEngine:
                 print(f"[CloneEngine] HF generation error: {exc}")
                 return (
                     self._fallback_extract(query, chunks),
-                    f"Fallback (HF error: {type(exc).__name__})"
+                    f"Fallback (HF error: {type(exc).__name__}: {str(exc)[:60]})"
                 )
 
         return self._fallback_extract(query, chunks), "Fallback (no HF_TOKEN)"
@@ -461,7 +461,7 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
 
             model_dropdown = gr.Dropdown(
                 choices=HF_MODELS,
-                value="meta-llama/Llama-3.2-3B-Instruct",
+                value="HuggingFaceH4/zephyr-7b-beta",
                 label="LLM:",
                 interactive=True,
             )
