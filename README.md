@@ -2,7 +2,7 @@
 title: Shahrina Khan - AI Digital Clone (Hybrid RAG)
 emoji: 🤖
 colorFrom: indigo
-colorTo: slate
+colorTo: blue
 sdk: static
 pinned: false
 ---
