@@ -239,7 +239,7 @@ class CloneEngine:
                 if isinstance(ans, str) and ans.strip():
                     return ans.strip(), "Mistral · `mistral-small-latest`"
             except Exception as exc:
-                print(f"[CloneEngine] Mistral error: {exc}")
+                print(f"[Mistral error] {type(exc).__name__}: {str(exc)[:300]}")
 
         # ── 2. Try HF Inference API ────────────────────────────────────────
         if self.hf_token:
@@ -255,37 +255,51 @@ class CloneEngine:
                 if isinstance(ans, str) and ans.strip():
                     return ans.strip(), f"HF · `{model.split('/')[-1]}`"
             except Exception as exc:
-                print(f"[CloneEngine] HF error: {exc}")
+                print(f"[HF error] {type(exc).__name__}: {str(exc)[:300]}")
 
         # ── 3. Text extraction fallback ────────────────────────────────────
         return self._fallback_extract(query, chunks), "Extracted from notes"
 
     def _fallback_extract(self, query: str, chunks: List[Dict[str, Any]]) -> str:
         q_tok = {"your" if t == "ur" else t for t in tokenize(query)}
+
+        # ── Try to match a Q&A pair ────────────────────────────────────────
         qa = []
         for ch in chunks:
-            for q_text, a_text in re.findall(
-                r"\*\*Q:\s*(.*?)\?\*\*\s*A:\s*(.*?)(?=\*\*Q:|\Z)",
+            # Handle both **Q: ...** and Q: ... formats
+            pairs = re.findall(
+                r"\*{0,2}Q:\s*(.*?)\?[\*]{0,2}\s*\n?\s*A:\s*(.*?)(?=\*{0,2}Q:|\Z)",
                 ch["text"], flags=re.DOTALL
-            ):
-                ov = len(q_tok & {"your" if t == "ur" else t
-                                  for t in tokenize(q_text)})
+            )
+            for q_text, a_text in pairs:
+                # Clean up answer — take only up to first blank line
+                a_clean = a_text.strip().split("\n\n")[0].strip()
+                # Remove any trailing ** or markdown
+                a_clean = re.sub(r"\*+$", "", a_clean).strip()
+                q_toks = {"your" if t == "ur" else t for t in tokenize(q_text)}
+                ov = len(q_tok & q_toks)
                 if ov:
-                    qa.append((ov, a_text.strip()))
+                    qa.append((ov, a_clean))
+
         if qa:
             best_ov, best_a = max(qa, key=lambda x: x[0])
             if best_ov >= min(2, len(q_tok)):
                 return best_a
 
+        # ── Fall back to best matching sentence ───────────────────────────
         sents = []
         for ch in chunks:
-            for s in re.split(r"(?<=[.!?])\s+",
-                              re.sub(r"^#+\s*", "", ch["text"].strip())):
+            # Strip markdown headers and Q: A: lines
+            text = re.sub(r"^#+\s*", "", ch["text"], flags=re.MULTILINE)
+            text = re.sub(r"\*{0,2}[QA]:\s*", "", text)
+            for s in re.split(r"(?<=[.!?])\s+", text):
+                s = s.strip()
                 ov = len(q_tok & set(tokenize(s)))
-                if s and ov:
-                    sents.append((ov, s.strip()))
+                if s and ov and len(s) > 20:
+                    sents.append((ov, s))
         if sents:
             return max(sents, key=lambda x: x[0])[1]
+
         return "I don't have that in my notes."
 
 
@@ -358,10 +372,14 @@ EXAMPLES = [
     "What accuracy did Verdade achieve on external tests?",
     "How does Verdade handle uncertainty in predictions?",
     "What is the Rescue Center in DeadlineOS?",
-    "What dataset was Verdade trained on?",
     "What certification do you have from HEC?",
     "What is Arbitrix and how does it use RAG?",
+    "What are your hobbies?",
+    "Why do you like cooking?",
+    "Do you like travelling?",
+    "How do you prefer to learn new technologies?",
     "How do you handle code bugs or unexpected errors?",
+    "What is your approach to continuous learning?",
     "Are you the real Shahrina?",
 ]
 
