@@ -1,0 +1,19 @@
+# Environments
+.venv/
+env/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets
+.env
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Assignment PDF
+*.pdf

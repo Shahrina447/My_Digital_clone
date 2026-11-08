@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shahrina Khan | AI Digital Clone</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gradio/lite/dist/lite.css" />
+  <script type="module" crossorigin src="https://cdn.jsdelivr.net/npm/@gradio/lite/dist/lite.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      background-color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <gradio-lite>
+    <gradio-requirements>
+      rank_bm25
+      numpy
+    </gradio-requirements>
+
+    <gradio-file name="app.py" url="app.py" entrypoint></gradio-file>
+    <gradio-file name="chunks.json" url="chunks.json"></gradio-file>
+    <gradio-file name="embeddings.npy" url="embeddings.npy"></gradio-file>
+  </gradio-lite>
+</body>
+</html>
