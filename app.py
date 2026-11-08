@@ -65,7 +65,15 @@ HF_MODELS = [
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
 def tokenize(text: str) -> List[str]:
-    return re.findall(r"\w+", text.lower())
+    STOP = {
+        "a","an","the","is","are","was","were","be","been","being",
+        "i","my","me","you","your","we","our","he","she","it","they",
+        "do","did","does","have","has","had","will","would","can","could",
+        "what","who","how","when","where","why","which","that","this",
+        "and","or","but","of","in","on","at","to","for","with","from",
+        "not","no","yes","so","very","just","also","about","up","out",
+    }
+    return [w for w in re.findall(r"\w+", text.lower()) if w not in STOP]
 
 
 # ── RAG Engine ────────────────────────────────────────────────────────────────
@@ -266,36 +274,35 @@ class CloneEngine:
         # ── Try to match a Q&A pair ────────────────────────────────────────
         qa = []
         for ch in chunks:
-            # Handle both **Q: ...** and Q: ... formats
             pairs = re.findall(
                 r"\*{0,2}Q:\s*(.*?)\?[\*]{0,2}\s*\n?\s*A:\s*(.*?)(?=\*{0,2}Q:|\Z)",
                 ch["text"], flags=re.DOTALL
             )
             for q_text, a_text in pairs:
-                # Clean up answer — take only up to first blank line
                 a_clean = a_text.strip().split("\n\n")[0].strip()
-                # Remove any trailing ** or markdown
                 a_clean = re.sub(r"\*+$", "", a_clean).strip()
                 q_toks = {"your" if t == "ur" else t for t in tokenize(q_text)}
                 ov = len(q_tok & q_toks)
-                if ov:
+                # Require meaningful overlap — at least 2 content words
+                if ov >= 2:
                     qa.append((ov, a_clean))
 
         if qa:
             best_ov, best_a = max(qa, key=lambda x: x[0])
-            if best_ov >= min(2, len(q_tok)):
+            # Only use if overlap is strong enough relative to query length
+            if best_ov >= min(3, len(q_tok)):
                 return best_a
 
         # ── Fall back to best matching sentence ───────────────────────────
         sents = []
         for ch in chunks:
-            # Strip markdown headers and Q: A: lines
             text = re.sub(r"^#+\s*", "", ch["text"], flags=re.MULTILINE)
             text = re.sub(r"\*{0,2}[QA]:\s*", "", text)
             for s in re.split(r"(?<=[.!?])\s+", text):
                 s = s.strip()
                 ov = len(q_tok & set(tokenize(s)))
-                if s and ov and len(s) > 20:
+                # Require at least 3 overlapping words for a sentence match
+                if s and ov >= 3 and len(s) > 30:
                     sents.append((ov, s))
         if sents:
             return max(sents, key=lambda x: x[0])[1]
@@ -324,14 +331,18 @@ def _chunks_table(chunks: List[Dict[str, Any]]) -> str:
 def _compare_modes(query: str, top_k: int) -> str:
     if not query.strip():
         return ""
-    rows = []
     results = {}
     for mode in ("Hybrid (RRF)", "BM25 only", "Dense only"):
         chunks = engine.retrieve(query, mode=mode, top_k=top_k)
-        results[mode] = [c["chunk_id"] for c in chunks]
+        # Shorten: "faq_chunk_3" → "faq-3", "projects_chunk_0" → "projects-0"
+        results[mode] = [
+            re.sub(r"_chunk_(\d+)$", r"-\1", c["chunk_id"])
+            for c in chunks
+        ]
 
     max_rows = max(len(v) for v in results.values())
-    header = "| Rank | Hybrid (RRF) | BM25 only | Dense only |\n|------|-------------|-----------|------------|\n"
+    header = "| Rank | Hybrid (RRF) | BM25 only | Dense only |\n|:----:|:------------|:----------|:-----------|\n"
+    rows = []
     for i in range(max_rows):
         h = results["Hybrid (RRF)"][i] if i < len(results["Hybrid (RRF)"]) else "—"
         b = results["BM25 only"][i]    if i < len(results["BM25 only"])    else "—"
@@ -367,18 +378,14 @@ def set_example(q: str) -> str:
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 EXAMPLES = [
-    "What is schedule density blindness in DeadlineOS?",
-    "What is the digital-twin feature in DeadlineOS?",
-    "What accuracy did Verdade achieve on external tests?",
-    "How does Verdade handle uncertainty in predictions?",
-    "What is the Rescue Center in DeadlineOS?",
-    "What certification do you have from HEC?",
-    "What is Arbitrix and how does it use RAG?",
+    "Where are you from?",
     "What are your hobbies?",
     "Why do you like cooking?",
-    "Do you like travelling?",
-    "How do you prefer to learn new technologies?",
-    "How do you handle code bugs or unexpected errors?",
+    "Do you like travelling? Where?",
+    "Why did you choose Computer Science?",
+    "What are your future goals?",
+    "How do you prefer to learn new things?",
+    "How do you handle code bugs?",
     "What is your approach to continuous learning?",
     "Are you the real Shahrina?",
 ]
