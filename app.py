@@ -423,25 +423,38 @@ css = """
 
 /* ─── Example chip buttons — inline wrapping ────────────── */
 .chips-wrap {
-    display: flex !important;
-    flex-wrap: wrap !important;
-    gap: 6px !important;
-    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 8px;
 }
-.chip button {
-    background: var(--background-fill-secondary) !important;
-    border: 1px solid var(--border-color-primary) !important;
-    border-radius: 20px !important;
-    padding: 5px 13px !important;
-    font-size: 0.80rem !important;
-    text-align: left !important;
-    color: var(--body-text-color) !important;
-    white-space: nowrap !important;
-    width: auto !important;
-    transition: border-color 0.15s;
+.chip-btn {
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 20px;
+    padding: 5px 13px;
+    font-size: 0.80rem;
+    color: var(--body-text-color);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, background 0.15s;
+    font-family: inherit;
 }
-.chip button:hover {
-    border-color: var(--color-accent) !important;
+.chip-btn:hover {
+    border-color: #818cf8;
+    background: var(--background-fill-primary);
+}
+
+/* ─── Compare table — no overflow ──────────────────────── */
+#compare-out table {
+    width: 100% !important;
+    table-layout: fixed !important;
+    word-break: break-word !important;
+    font-size: 0.78rem !important;
+}
+#compare-out td, #compare-out th {
+    padding: 4px 6px !important;
+    overflow: hidden !important;
 }
 
 /* ─── Chunks section ────────────────────────────────────── */
@@ -507,6 +520,7 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
                 placeholder="e.g. Where are you from and what are you studying?",
                 lines=2,
                 show_label=False,
+                elem_id="query-box",
             )
 
             mode_radio = gr.Radio(
@@ -545,10 +559,9 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
         with gr.Column(scale=45):
 
             gr.HTML("<div class='section-head'>Same question, all three modes</div>")
-            gr.Markdown(
-                "<span style='font-size:0.82rem;color:var(--body-text-color-subdued)'>"
-                "Ask a question to compare the top-k chunk IDs from BM25, "
-                "dense and hybrid retrieval.</span>",
+            gr.HTML(
+                "<p style='font-size:0.82rem;color:var(--body-text-color-subdued);margin-bottom:8px'>"
+                "Ask a question to compare the top-k chunk IDs from BM25, dense and hybrid retrieval.</p>"
             )
             compare_box = gr.Markdown(
                 value="",
@@ -558,11 +571,20 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
             gr.HTML("<hr style='margin:16px 0;opacity:0.2'>")
             gr.HTML("<div class='section-head'>Try an example</div>")
 
-            gr.HTML('<div class="chips-wrap">')
-            for ex in EXAMPLES:
-                btn = gr.Button(ex, size="sm", elem_classes=["chip"], variant="secondary")
-                btn.click(fn=lambda q=ex: q, inputs=[], outputs=[query_box])
-            gr.HTML('</div>')
+            # Render chips as pure HTML — clicking fires JS to set the textbox
+            chips_html = (
+                "<div class='chips-wrap' id='chips-container'>"
+                + "".join(
+                    f'<button class="chip-btn" onclick="'
+                    f"var tb=document.querySelector('#query-box textarea');"
+                    f"tb.value='{ex.replace(chr(39), chr(39)+''+chr(39))}';"
+                    f"tb.dispatchEvent(new Event('input',{{bubbles:true}}));"
+                    f'">{ex}</button>'
+                    for ex in EXAMPLES
+                )
+                + "</div>"
+            )
+            gr.HTML(chips_html)
 
     # ── Retrieved chunks (full-width below) ───────────────────────────────────
     gr.HTML("<div class='section-head' style='margin-top:16px'>Retrieved chunks (source, chunk ID and scores)</div>")
