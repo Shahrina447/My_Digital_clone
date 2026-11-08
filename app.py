@@ -9,6 +9,13 @@ Design:
 """
 
 from __future__ import annotations
+
+try:
+    import spaces as _spaces
+except ModuleNotFoundError as exc:
+    if exc.name != "spaces":
+        raise
+
 import json
 import os
 import re
