@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from rank_bm25 import BM25Okapi
 import gradio as gr
+from huggingface_hub import InferenceClient
 
 # Try loading .env locally
 try:
@@ -58,6 +59,11 @@ class CloneEngine:
         self.embeddings: np.ndarray | None = None
         self.bm25: BM25Okapi | None = None
         self.dense_model = None
+        self.model_name = os.environ.get(
+            "HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct"
+        )
+        hf_token = os.environ.get("HF_TOKEN")
+        self.inference_client = InferenceClient(token=hf_token) if hf_token else None
 
         self._load_knowledge()
 
@@ -169,67 +175,84 @@ class CloneEngine:
         return results
 
     def generate(self, query: str, chunks: List[Dict[str, Any]]) -> str:
-        """Call Mistral AI with grounded context and persona prompt."""
+        """Generate a grounded answer or extract a concise answer from notes."""
         if not chunks:
             return "I don't have that in my notes."
 
-        context_str = "\n\n---\n\n".join(
-            [f"[Source: {c['source']} | Chunk: {c['chunk_id']}]\n{c['text']}" for c in chunks]
+        context = "\n\n---\n\n".join(
+            f"[Source: {chunk['source']} | Chunk: {chunk['chunk_id']}]\n{chunk['text']}"
+            for chunk in chunks
         )
-
-        mistral_key = os.environ.get("MISTRAL_API_KEY")
-        if mistral_key:
+        notice = ""
+        if self.inference_client is not None:
             try:
-                import json, urllib.request
-                url = "https://api.mistral.ai/v1/chat/completions"
-                headers = {
-                    "Authorization": f"Bearer {mistral_key}",
-                    "Content-Type": "application/json",
+                response = self.inference_client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"CONTEXT:\n{context}\n\nQUESTION:\n{query}\n\n"
+                                "Answer in first person using only the context above:"
+                            ),
+                        },
+                    ],
+                    temperature=0.2,
+                    max_tokens=300,
+                )
+                answer = response.choices[0].message.content
+                if isinstance(answer, str) and answer.strip():
+                    return answer.strip()
+                raise RuntimeError("The inference API returned an empty answer.")
+            except Exception as exc:
+                print(f"[CloneEngine] Hugging Face generation failed: {exc}")
+                notice = (
+                    f"⚠️ AI generation failed ({type(exc).__name__}); "
+                    "showing an answer extracted from retrieved notes.\n\n"
+                )
+        else:
+            notice = (
+                "⚠️ `HF_TOKEN` is not configured; showing an answer extracted "
+                "from retrieved notes.\n\n"
+            )
+
+        query_tokens = {"your" if token == "ur" else token for token in tokenize(query)}
+        qa_matches = []
+        for chunk in chunks:
+            pairs = re.findall(
+                r"\*\*Q:\s*(.*?)\?\*\*\s*A:\s*(.*?)(?=\*\*Q:|\Z)",
+                chunk["text"],
+                flags=re.DOTALL,
+            )
+            for question, answer in pairs:
+                question_tokens = {
+                    "your" if token == "ur" else token
+                    for token in tokenize(question)
                 }
-                messages = [
-                    {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f"CONTEXT:\n{context_str}\n\nQUESTION:\n{query}\n\nAnswer in first person as Shahrina Khan using only the context above:",
-                    },
-                ]
-                payload = {
-                    "model": "open-mistral-7b",
-                    "messages": messages,
-                    "temperature": 0.2,
-                    "max_tokens": 400,
-                }
-                req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
-                with urllib.request.urlopen(req, timeout=12) as resp:
-                    data = json.loads(resp.read().decode())
-                    content = data["choices"][0]["message"]["content"].strip()
-                    if content:
-                        return content
-            except Exception as e:
-                # Fallback to local extraction if offline
-                pass
+                overlap = len(query_tokens.intersection(question_tokens))
+                if overlap:
+                    qa_matches.append((overlap, answer.strip()))
 
-        # Grounded extraction fallback
-        top = chunks[0]
-        text = top["text"].strip()
-        q_tokens = set(tokenize(query))
-        qa_pairs = re.findall(r"\*\*Q:\s*(.*?)\?\*\*\s*A:\s*(.*?)(?=\*\*Q:|\Z)", text, flags=re.DOTALL)
-        if qa_pairs:
-            best_answer = None
-            max_q_overlap = 0
-            for q_text, a_text in qa_pairs:
-                overlap = len(q_tokens.intersection(set(tokenize(q_text))))
-                if overlap > max_q_overlap:
-                    max_q_overlap = overlap
-                    best_answer = a_text.strip()
-            if best_answer and max_q_overlap > 0:
-                return best_answer
+        if qa_matches:
+            best_overlap, best_answer = max(qa_matches, key=lambda match: match[0])
+            if best_overlap >= min(2, len(query_tokens)):
+                return notice + best_answer
 
-        clean_passage = re.sub(r"^#+\s*.*?\n", "", text).strip()
-        if len(clean_passage) > 450:
-            clean_passage = clean_passage[:450].rsplit(".", 1)[0] + "."
+        sentence_matches = []
+        for chunk in chunks:
+            text = re.sub(r"^#+\s*", "", chunk["text"].strip())
+            for sentence in re.split(r"(?<=[.!?])\s+", text):
+                sentence = sentence.strip()
+                overlap = len(query_tokens.intersection(set(tokenize(sentence))))
+                if sentence and overlap:
+                    sentence_matches.append((overlap, sentence))
 
-        return clean_passage
+        if sentence_matches:
+            _, answer = max(sentence_matches, key=lambda match: match[0])
+            return notice + answer
+
+        return notice + "I don't have that in my notes."
 
 
 engine = CloneEngine()
@@ -259,6 +282,10 @@ def handle_query(query: str, mode: str, top_k: int) -> Tuple[str, str]:
     inspector = format_chunks_markdown(retrieved)
 
     return answer, inspector
+
+
+def clear_stale_results() -> Tuple[str, str]:
+    return "*Submit your question to get an answer.*", "*No passages retrieved yet.*"
 
 
 if _spaces is not None:
@@ -353,6 +380,12 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
     with gr.Accordion("🔍 Retrieved Chunks & Score Inspector", open=False):
         gr.Markdown("*Inspect the exact source passages and similarity scores used to ground the answer:*")
         inspector_box = gr.Markdown(value="*No passages retrieved yet.*")
+
+    query_box.input(
+        fn=clear_stale_results,
+        inputs=[],
+        outputs=[answer_box, inspector_box],
+    )
 
     gr.Markdown("#### 💡 Example Questions")
     gr.Examples(
