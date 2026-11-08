@@ -3,13 +3,18 @@ title: Shahrina Khan - AI Digital Clone (Hybrid RAG)
 emoji: 🤖
 colorFrom: indigo
 colorTo: blue
-sdk: static
+sdk: gradio
+sdk_version: 6.31.0
 pinned: false
+python_version: "3.12"
+app_file: app.py
+license: mit
 ---
 
 # Assignment 2: Build Your Digital Clone (Hybrid RAG)
 
-> **Public Space URL:** [https://huggingface.co/spaces/Shahrina447/my-digital-clone](https://huggingface.co/spaces/Shahrina447/my-digital-clone) *(Update with your exact deployed Space URL)*  
+> **Public Space URL:** [https://huggingface.co/spaces/abdullaheqbal/digital-clone](https://huggingface.co/spaces/abdullaheqbal/digital-clone)<br>
+> **Repository:** [https://github.com/Shahrina447/My_Digital_clone](https://github.com/Shahrina447/My_Digital_clone)<br>
 > **Student Name:** Shahrina Khan  
 > **Degree Program:** BS Computer Science (7th Semester), University of Management and Technology (UMT), Sialkot  
 > **Course / Learning Outcome:** CLO-2 (Hybrid RAG Architecture)

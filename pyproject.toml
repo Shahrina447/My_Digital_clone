@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Shahrina447", email = "23018020084@skt.umt.edu.pk" }
 ]
-requires-python = ">=3.15"
+requires-python = ">=3.12"
 dependencies = [
     "gradio>=6.31.0",
     "rank-bm25>=0.2.2",
@@ -20,5 +20,4 @@ dependencies = [
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]
 build-backend = "uv_build"
-
 

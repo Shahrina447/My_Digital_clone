@@ -1,12 +1,11 @@
 """
-app.py - Gradio Web Application for Shahrina Khan's AI Digital Clone.
+app.py - Clean, Professional Gradio Web Application for Shahrina Khan's AI Digital Clone.
 
-Assignment Requirements (Criterion 5):
-1. Visible Banner: "This is an AI clone, not the real person."
-2. Question Input box and Answer display area.
-3. Retrieval Mode Selector: [BM25 only, Dense only, Hybrid].
-4. Retrieved Chunks Panel showing sources, chunk IDs, and similarity scores.
-5. Deployed to Hugging Face Spaces (Compatible with both Standard compute and Gradio-Lite).
+Design:
+- Collapsible Sidebar with Retrieval Settings & Profile Info.
+- Clean, focused Chat & Answer interface.
+- Visible AI Clone Disclaimer Banner (Rubric Criterion 5).
+- Expandable Retrieved Chunks & Score Inspector.
 """
 
 from __future__ import annotations
@@ -20,14 +19,13 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 import gradio as gr
 
-# Try loading .env locally if python-dotenv is present
+# Try loading .env locally
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
-# Persona Prompt template for Shahrina Khan
 SYSTEM_PERSONA_PROMPT = """You are the AI clone of Shahrina Khan, a final-year BS Computer Science student at UMT Sialkot (Session 2023-2027).
 Speak in the first person ("I", "my", "me"), in a natural, polite, and authentic tone.
 
@@ -56,7 +54,6 @@ class CloneEngine:
         self._load_knowledge()
 
     def _load_knowledge(self) -> None:
-        """Load chunks from chunks.json or data directory, and embeddings from embeddings.npy."""
         # 1. Load Chunks
         chunks_file = Path("chunks.json")
         if chunks_file.exists():
@@ -75,7 +72,7 @@ class CloneEngine:
         if embeddings_file.exists():
             self.embeddings = np.load(embeddings_file)
 
-        # 4. Optional lazy-loader for local sentence-transformers
+        # 4. Optional local sentence-transformers loader
         try:
             from sentence_transformers import SentenceTransformer
             self.dense_model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
@@ -83,12 +80,10 @@ class CloneEngine:
             self.dense_model = None
 
     def _get_query_embedding(self, query: str) -> np.ndarray:
-        """Encode query vector using local model or fallback projection."""
         if self.dense_model is not None:
             vec = self.dense_model.encode(query, normalize_embeddings=True)
             return np.array(vec, dtype=np.float32)
 
-        # Fallback dense representation using word-overlap projection against chunk vectors
         q_tokens = set(tokenize(query))
         weights = np.zeros(len(self.chunks), dtype=np.float32)
         for i, c in enumerate(self.chunks):
@@ -106,7 +101,6 @@ class CloneEngine:
         return pseudo_vec
 
     def retrieve(self, query: str, mode: str = "Hybrid", top_k: int = 3) -> List[Dict[str, Any]]:
-        """Retrieve chunks using BM25 only, Dense only, or Hybrid RRF."""
         q_tokens = tokenize(query)
         if not q_tokens:
             return []
@@ -114,11 +108,9 @@ class CloneEngine:
         top_k = int(top_k)
         candidate_n = max(top_k * 3, 15)
 
-        # 1. BM25 scoring
         bm25_scores = self.bm25.get_scores(q_tokens)
         bm25_ranked_indices = np.argsort(bm25_scores)[::-1][:candidate_n]
 
-        # 2. Dense scoring
         if self.embeddings is not None:
             q_vec = self._get_query_embedding(query)
             dense_scores = np.dot(self.embeddings, q_vec)
@@ -129,7 +121,6 @@ class CloneEngine:
 
         norm_mode = mode.strip().lower()
 
-        # BM25 only mode
         if "bm25" in norm_mode:
             results = []
             for rank, idx in enumerate(bm25_ranked_indices[:top_k], start=1):
@@ -140,7 +131,6 @@ class CloneEngine:
                 results.append(chunk)
             return results
 
-        # Dense only mode
         if "dense" in norm_mode:
             results = []
             for rank, idx in enumerate(dense_ranked_indices[:top_k], start=1):
@@ -151,7 +141,7 @@ class CloneEngine:
                 results.append(chunk)
             return results
 
-        # Hybrid RRF mode: sum of 1 / (60 + rank)
+        # Hybrid RRF: sum of 1 / (60 + rank)
         rrf_scores: Dict[int, float] = {}
         for rank, idx in enumerate(bm25_ranked_indices, start=1):
             rrf_scores[idx] = rrf_scores.get(idx, 0.0) + (1.0 / (60 + rank))
@@ -171,7 +161,7 @@ class CloneEngine:
         return results
 
     def generate(self, query: str, chunks: List[Dict[str, Any]]) -> str:
-        """Call Hugging Face Inference API or synthesize grounded persona answer."""
+        """Call Mistral AI with grounded context and persona prompt."""
         if not chunks:
             return "I don't have that in my notes."
 
@@ -179,67 +169,82 @@ class CloneEngine:
             [f"[Source: {c['source']} | Chunk: {c['chunk_id']}]\n{c['text']}" for c in chunks]
         )
 
-        hf_token = os.environ.get("HF_TOKEN")
-        hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
-
-        if hf_token:
+        mistral_key = os.environ.get("MISTRAL_API_KEY")
+        if mistral_key:
             try:
-                from huggingface_hub import InferenceClient
-                client = InferenceClient(token=hf_token)
+                import json, urllib.request
+                url = "https://api.mistral.ai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {mistral_key}",
+                    "Content-Type": "application/json",
+                }
                 messages = [
                     {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
                     {
                         "role": "user",
-                        "content": f"CONTEXT:\n{context_str}\n\nQUESTION:\n{query}\n\nAnswer in first person as Shahrina Khan:",
+                        "content": f"CONTEXT:\n{context_str}\n\nQUESTION:\n{query}\n\nAnswer in first person as Shahrina Khan using only the context above:",
                     },
                 ]
-                resp = client.chat.completions.create(
-                    model=hf_model,
-                    messages=messages,
-                    temperature=0.2,
-                    max_tokens=400,
-                )
-                return resp.choices[0].message.content.strip()
+                payload = {
+                    "model": "open-mistral-7b",
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "max_tokens": 400,
+                }
+                req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    data = json.loads(resp.read().decode())
+                    content = data["choices"][0]["message"]["content"].strip()
+                    if content:
+                        return content
             except Exception as e:
+                # Fallback to local extraction if offline
                 pass
 
-        # Grounded response preview when API key is not configured
+        # Grounded extraction fallback
         top = chunks[0]
-        return (
-            f"*(HF_TOKEN not configured in Space secrets. Showing grounded response from my notes:)*\n\n"
-            f"Based on my documents in **`{top['source']}`**:\n\n"
-            f"> {top['text'][:320]}..."
-        )
+        text = top["text"].strip()
+        q_tokens = set(tokenize(query))
+        qa_pairs = re.findall(r"\*\*Q:\s*(.*?)\?\*\*\s*A:\s*(.*?)(?=\*\*Q:|\Z)", text, flags=re.DOTALL)
+        if qa_pairs:
+            best_answer = None
+            max_q_overlap = 0
+            for q_text, a_text in qa_pairs:
+                overlap = len(q_tokens.intersection(set(tokenize(q_text))))
+                if overlap > max_q_overlap:
+                    max_q_overlap = overlap
+                    best_answer = a_text.strip()
+            if best_answer and max_q_overlap > 0:
+                return best_answer
+
+        clean_passage = re.sub(r"^#+\s*.*?\n", "", text).strip()
+        if len(clean_passage) > 450:
+            clean_passage = clean_passage[:450].rsplit(".", 1)[0] + "."
+
+        return clean_passage
 
 
-# Instantiate engine
 engine = CloneEngine()
 
 
 def format_chunks_markdown(chunks: List[Dict[str, Any]]) -> str:
-    """Format retrieved chunks into markdown cards with scores and sources."""
     if not chunks:
-        return "*No relevant passages retrieved for this question.*"
+        return "*No relevant passages retrieved for this query.*"
 
-    parts = []
+    cards = []
     for c in chunks:
-        parts.append(
-            f"### Rank #{c['rank']} | {c['retriever']} Score: `{c['score']:.4f}`\n"
-            f"- **Source File:** `{c['source']}`\n"
-            f"- **Chunk ID:** `{c['chunk_id']}` ({c.get('word_count', len(c['text'].split()))} words)\n\n"
+        cards.append(
+            f"**Rank #{c['rank']}** — `{c['retriever']}` (Score: `{c['score']:.4f}`)\n"
+            f"- **Source:** `{c['source']}` | **ID:** `{c['chunk_id']}`\n"
             f"> {c['text']}\n"
         )
-    return "\n---\n".join(parts)
+    return "\n---\n".join(cards)
 
 
 def handle_query(query: str, mode: str, top_k: int) -> Tuple[str, str]:
-    """Callback for user queries in Gradio."""
     cleaned = query.strip()
     if not cleaned:
-        return (
-            "Please type a question to ask my digital clone.",
-            "*No query entered.*",
-        )
+        return "Please type a question to ask my digital clone.", "*No query entered.*"
 
     retrieved = engine.retrieve(cleaned, mode=mode, top_k=top_k)
     answer = engine.generate(cleaned, retrieved)
@@ -248,22 +253,65 @@ def handle_query(query: str, mode: str, top_k: int) -> Tuple[str, str]:
     return answer, inspector
 
 
-# Gradio Layout
-custom_theme = gr.themes.Soft(
-    primary_hue="indigo",
-    secondary_hue="slate",
+# Custom clean & professional theme
+professional_theme = gr.themes.Soft(
+    primary_hue="slate",
+    secondary_hue="blue",
+    neutral_hue="slate",
+    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
 )
 
 with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
-    # Mandatory Banner (Criterion 5)
+    # ------------------ SIDEBAR (Settings & Profile) ------------------
+    with gr.Sidebar(open=True):
+        gr.Markdown(
+            """
+            ### 👤 Shahrina Khan
+            **BSCS Student @ UMT Sialkot**<br>
+            *Web Developer & Applied AI Enthusiast*
+
+            ---
+            """
+        )
+
+        gr.Markdown("#### ⚙️ Retrieval Settings")
+        mode_choice = gr.Radio(
+            choices=["Hybrid", "BM25 only", "Dense only"],
+            value="Hybrid",
+            label="Retrieval Mode",
+            info="Choose search strategy",
+        )
+        top_k_slider = gr.Slider(
+            minimum=1,
+            maximum=5,
+            value=3,
+            step=1,
+            label="Passages to Retrieve (Top-K)",
+        )
+
+        gr.Markdown(
+            """
+            ---
+            #### 📊 System Overview
+            - **RAG Architecture:** Hybrid (BM25 + Dense)
+            - **Fusion Method:** Reciprocal Rank Fusion (RRF)
+            - **Embedding Model:** `all-MiniLM-L6-v2`
+            - **Knowledge Base:** 9 docs (~6,800 words)
+            """
+        )
+
+        clear_btn = gr.Button("Clear Chat", variant="secondary", size="sm")
+
+    # ------------------ MAIN CONTENT AREA ------------------
+    # Mandatory AI Clone Banner (Rubric Criterion 5)
     gr.Markdown(
         """
-        <div style="background-color: #fff3cd; border: 1px solid #ffeeba; border-left: 6px solid #ffc107; padding: 14px 20px; border-radius: 6px; margin-bottom: 20px;">
-            <h3 style="margin: 0; color: #856404; font-size: 1.15rem;">
+        <div style="background-color: #fefce8; border: 1px solid #fef08a; border-left: 5px solid #eab308; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;">
+            <strong style="color: #854d0e; font-size: 0.95rem;">
                 ⚠️ AI Clone Notice: This is an AI clone, not the real person.
-            </h3>
-            <p style="margin: 6px 0 0 0; color: #856404; font-size: 0.95rem;">
-                This conversational agent represents <strong>Shahrina Khan</strong> (BSCS student at UMT Sialkot). It answers questions strictly using verified documents from her knowledge base via a <strong>Hybrid RAG pipeline</strong> (BM25 + Dense embeddings + RRF fusion).
+            </strong>
+            <p style="margin: 4px 0 0 0; color: #713f12; font-size: 0.88rem;">
+                Answers are generated strictly from Shahrina Khan's verified academic background, projects (<strong>DeadlineOS</strong>, <strong>Verdade</strong>), and technical notes.
             </p>
         </div>
         """
@@ -271,64 +319,42 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
 
     gr.Markdown(
         """
-        # 🤖 Shahrina Khan – AI Digital Clone
-        Ask me anything about my academic journey at UMT Sialkot, my projects (**DeadlineOS**, **Verdade**, **Arbitrix**), technical stack, study habits, cooking, or northern Pakistan travels!
+        # Chat with Shahrina's AI Clone
+        Ask me about my degree at UMT Sialkot, projects, developer stack, study habits, cooking recipes, or travels in northern Pakistan.
         """
     )
 
+    query_box = gr.Textbox(
+        label="",
+        placeholder="Type a question here and press Enter (e.g., What is DeadlineOS and what problem does it solve?)...",
+        lines=2,
+    )
+
     with gr.Row():
-        with gr.Column(scale=5):
-            query_box = gr.Textbox(
-                label="Your Question",
-                placeholder="e.g., What is schedule density blindness in DeadlineOS?",
-                lines=2,
-            )
+        ask_btn = gr.Button("Ask Question", variant="primary", scale=2)
 
-            with gr.Row():
-                mode_choice = gr.Radio(
-                    choices=["Hybrid", "BM25 only", "Dense only"],
-                    value="Hybrid",
-                    label="Retrieval Mode (Rubric Criterion 3 & 5)",
-                    info="Choose BM25 keyword matching, Dense semantic vectors, or Hybrid RRF.",
-                )
-                top_k_slider = gr.Slider(
-                    minimum=1,
-                    maximum=5,
-                    value=3,
-                    step=1,
-                    label="Top-k Chunks",
-                    info="Number of passages retrieved for grounding.",
-                )
+    gr.Markdown("#### 💬 Clone Response")
+    answer_box = gr.Markdown(
+        value="*Your answer will appear here.*"
+    )
 
-            with gr.Row():
-                ask_btn = gr.Button("Ask Clone", variant="primary")
-                clear_btn = gr.Button("Clear", variant="secondary")
+    with gr.Accordion("🔍 Retrieved Chunks & Score Inspector", open=False):
+        gr.Markdown("*Inspect the exact source passages and similarity scores used to ground the answer:*")
+        inspector_box = gr.Markdown(value="*No passages retrieved yet.*")
 
-            gr.Examples(
-                examples=[
-                    ["What is schedule density blindness in DeadlineOS?", "Hybrid", 3],
-                    ["What dataset and evaluation results did Verdade achieve?", "Hybrid", 3],
-                    ["How do you enjoy your downtime preparing tasty dishes?", "Dense only", 3],
-                    ["What are your main technical skills and frontend tools?", "BM25 only", 3],
-                    ["What advice would you give to a junior computer science student?", "Hybrid", 3],
-                ],
-                inputs=[query_box, mode_choice, top_k_slider],
-            )
+    gr.Markdown("#### 💡 Example Questions")
+    gr.Examples(
+        examples=[
+            ["What is schedule density blindness in DeadlineOS?", "Hybrid", 3],
+            ["What dataset and evaluation results did Verdade achieve?", "Hybrid", 3],
+            ["How do you enjoy your downtime preparing tasty dishes?", "Dense only", 3],
+            ["What are your main technical skills and frontend tools?", "BM25 only", 3],
+            ["What advice would you give to a junior computer science student?", "Hybrid", 3],
+        ],
+        inputs=[query_box, mode_choice, top_k_slider],
+    )
 
-        with gr.Column(scale=6):
-            answer_box = gr.Markdown(
-                label="Clone's Answer",
-                value="*Ask a question on the left to see my response.*",
-            )
-
-            with gr.Accordion("🔍 Retrieved Chunks & Score Inspector", open=True):
-                gr.Markdown(
-                    "*Passages retrieved from the knowledge base, their source documents, and their similarity scores:*"
-                )
-                inspector_box = gr.Markdown(
-                    value="*Retrieved passages will appear here.*"
-                )
-
+    # Wire event handlers
     ask_btn.click(
         fn=handle_query,
         inputs=[query_box, mode_choice, top_k_slider],
@@ -340,10 +366,10 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
         outputs=[answer_box, inspector_box],
     )
     clear_btn.click(
-        fn=lambda: ("", "*Ask a question on the left to see my response.*", "*Retrieved passages will appear here.*"),
+        fn=lambda: ("", "*Your answer will appear here.*", "*No passages retrieved yet.*"),
         inputs=[],
         outputs=[query_box, answer_box, inspector_box],
     )
 
 if __name__ == "__main__":
-    demo.launch(theme=custom_theme)
+    demo.launch(theme=professional_theme)
