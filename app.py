@@ -15,6 +15,7 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != "spaces":
         raise
+    _spaces = None
 
 import json
 import os
@@ -258,6 +259,10 @@ def handle_query(query: str, mode: str, top_k: int) -> Tuple[str, str]:
     inspector = format_chunks_markdown(retrieved)
 
     return answer, inspector
+
+
+if _spaces is not None:
+    handle_query = _spaces.GPU(handle_query)
 
 
 # Custom clean & professional theme
