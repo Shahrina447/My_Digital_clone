@@ -84,44 +84,53 @@ class CloneEngine:
             with open(chunks_file, "w", encoding="utf-8") as f:
                 json.dump(self.chunks, f, ensure_ascii=False, indent=2)
 
+        # BM25 — pure Python, no CUDA, safe at import time
         tokenized_corpus = [tokenize(c["text"]) for c in self.chunks]
         self.bm25 = BM25Okapi(tokenized_corpus)
 
+        # Load pre-computed embeddings (numpy only — no CUDA at startup)
         emb_file = Path("embeddings.npy")
         if emb_file.exists():
             loaded = np.load(emb_file)
             if len(loaded) == len(self.chunks):
                 self.embeddings = loaded
 
-        if self.embeddings is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                m = SentenceTransformer("all-MiniLM-L6-v2")
-                vecs = m.encode([c["text"] for c in self.chunks],
-                                normalize_embeddings=True, show_progress_bar=False)
-                self.embeddings = np.array(vecs, dtype=np.float32)
-                np.save(emb_file, self.embeddings)
-                self.dense_model = m
-            except Exception as e:
-                print(f"[CloneEngine] embeddings failed: {e}")
+        # NOTE: dense_model is intentionally NOT loaded here.
+        # It is lazy-loaded on the first query to avoid CUDA initialising
+        # before HF Spaces' `spaces` package has a chance to set up ZeroGPU.
 
-        if self.dense_model is None:
+    def _get_dense_model(self):
+        """Lazy-load SentenceTransformer on first use (avoids CUDA-at-import crash)."""
+        if self.dense_model is not None:
+            return self.dense_model
+        try:
+            from sentence_transformers import SentenceTransformer
             try:
-                from sentence_transformers import SentenceTransformer
-                try:
-                    self.dense_model = SentenceTransformer("all-MiniLM-L6-v2",
-                                                           local_files_only=True)
-                except Exception:
-                    self.dense_model = SentenceTransformer("all-MiniLM-L6-v2")
+                self.dense_model = SentenceTransformer(
+                    "all-MiniLM-L6-v2", local_files_only=True
+                )
             except Exception:
-                pass
+                self.dense_model = SentenceTransformer("all-MiniLM-L6-v2")
+            # If embeddings weren't computed yet, compute and cache them now
+            if self.embeddings is None:
+                vecs = self.dense_model.encode(
+                    [c["text"] for c in self.chunks],
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+                self.embeddings = np.array(vecs, dtype=np.float32)
+                np.save("embeddings.npy", self.embeddings)
+        except Exception as e:
+            print(f"[CloneEngine] dense model unavailable: {e}")
+        return self.dense_model
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
     def _query_vec(self, query: str) -> np.ndarray:
-        if self.dense_model is not None:
-            v = self.dense_model.encode(query, normalize_embeddings=True)
+        model = self._get_dense_model()
+        if model is not None:
+            v = model.encode(query, normalize_embeddings=True)
             return np.array(v, dtype=np.float32)
-        # TF-IDF-style fallback
+        # TF-IDF-style fallback when no dense model available
         q = set(tokenize(query))
         w = np.zeros(len(self.chunks), dtype=np.float32)
         for i, c in enumerate(self.chunks):
