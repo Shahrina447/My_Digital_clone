@@ -36,11 +36,7 @@ try:
 except Exception:
     pass
 
-try:
-    from mistralai import Mistral
-    _mistral_available = True
-except ImportError:
-    _mistral_available = False
+from huggingface_hub import InferenceClient
 
 # ── Persona Prompt ───────────────────────────────────────────────────────────
 SYSTEM_PERSONA_PROMPT = """You are the AI clone of Shahrina Khan, a final-year BS Computer Science student at UMT Sialkot (Session 2023-2027).
@@ -53,12 +49,12 @@ Rules:
 4. If asked whether you are the real person, say you are an AI clone of Shahrina Khan, not the real person.
 5. Keep your response direct, clear, and under 150 words."""
 
-# Available Mistral models for the dropdown
-MISTRAL_MODELS = [
-    "mistral-small-latest",
-    "mistral-medium-latest",
-    "open-mistral-7b",
-    "open-mixtral-8x7b",
+# Available HF models for the dropdown
+HF_MODELS = [
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "Qwen/Qwen2.5-7B-Instruct",
 ]
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -73,16 +69,12 @@ class CloneEngine:
         self.embeddings: np.ndarray | None = None
         self.bm25: BM25Okapi | None = None
         self.dense_model = None
-        self.mistral_api_key = os.environ.get("MISTRAL_API_KEY")
-        self._mistral_clients: Dict[str, Any] = {}   # cache per model
+        self.hf_token = os.environ.get("HF_TOKEN")
         self._load_knowledge()
 
-    def _get_client(self, model: str):
-        if not _mistral_available or not self.mistral_api_key:
-            return None
-        if model not in self._mistral_clients:
-            self._mistral_clients[model] = Mistral(api_key=self.mistral_api_key)
-        return self._mistral_clients[model]
+    def _get_hf_client(self) -> InferenceClient:
+        """Create a fresh HF InferenceClient each call (safe on ZeroGPU)."""
+        return InferenceClient(token=self.hf_token)
 
     def _load_knowledge(self) -> None:
         chunks_file = Path("chunks.json")
@@ -202,7 +194,7 @@ class CloneEngine:
 
     # ── Generation ────────────────────────────────────────────────────────────
     def generate(self, query: str, chunks: List[Dict[str, Any]],
-                 model: str = "mistral-small-latest") -> Tuple[str, str]:
+                 model: str = "meta-llama/Llama-3.2-3B-Instruct") -> Tuple[str, str]:
         """Returns (answer, generated_by_label)."""
         if not chunks:
             return "I don't have that in my notes.", "—"
@@ -211,11 +203,11 @@ class CloneEngine:
             f"[Source: {c['source']} | {c['chunk_id']}]\n{c['text']}"
             for c in chunks
         )
-        client = self._get_client(model)
 
-        if client is not None:
+        if self.hf_token:
             try:
-                resp = client.chat.complete(
+                client = self._get_hf_client()
+                resp = client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
@@ -228,18 +220,15 @@ class CloneEngine:
                 )
                 ans = resp.choices[0].message.content
                 if isinstance(ans, str) and ans.strip():
-                    return ans.strip(), f"Mistral · `{model}`"
+                    return ans.strip(), f"HF · `{model.split('/')[-1]}`"
             except Exception as exc:
-                print(f"[CloneEngine] Mistral error: {exc}")
+                print(f"[CloneEngine] HF generation error: {exc}")
                 return (
-                    f"⚠️ Generation failed ({type(exc).__name__}). "
-                    "Check your API key or try again shortly.\n\n"
-                    + self._fallback_extract(query, chunks),
-                    f"Fallback (error: {type(exc).__name__})"
+                    self._fallback_extract(query, chunks),
+                    f"Fallback (HF error: {type(exc).__name__})"
                 )
 
-        # No key configured — extract answer from chunks
-        return self._fallback_extract(query, chunks), "Fallback (no API key)"
+        return self._fallback_extract(query, chunks), "Fallback (no HF_TOKEN)"
 
     def _fallback_extract(self, query: str, chunks: List[Dict[str, Any]]) -> str:
         q_tok = {"your" if t == "ur" else t for t in tokenize(query)}
@@ -326,14 +315,14 @@ def set_example(q: str) -> str:
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 EXAMPLES = [
-    "Where are you from and what are you studying?",
-    "What is DeadlineOS and what problem does it solve?",
-    "What advice would you give to a fresher joining computer science?",
-    "How do you handle bugs or unexpected errors in code?",
-    "What is Verdade and what accuracy did it achieve?",
-    "Do you like cooking? What do you enjoy making?",
-    "What is Arbitrix and how does it work?",
-    "Do you like travelling? Where do you like to go?",
+    "Where are you from?",
+    "What degree are you doing?",
+    "What semester are you in?",
+    "What is DeadlineOS?",
+    "Tell me about Verdade",
+    "What is Arbitrix?",
+    "What are your hobbies?",
+    "Do you like cooking?",
     "What are your future goals?",
     "Are you the real Shahrina?",
 ]
@@ -471,8 +460,8 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone") as demo:
             )
 
             model_dropdown = gr.Dropdown(
-                choices=MISTRAL_MODELS,
-                value="mistral-small-latest",
+                choices=HF_MODELS,
+                value="meta-llama/Llama-3.2-3B-Instruct",
                 label="LLM:",
                 interactive=True,
             )
