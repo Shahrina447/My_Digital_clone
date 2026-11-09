@@ -65,15 +65,22 @@ HF_MODELS = [
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
 def tokenize(text: str) -> List[str]:
-    STOP = {
-        "a","an","the","is","are","was","were","be","been","being",
-        "i","my","me","you","your","we","our","he","she","it","they",
-        "do","did","does","have","has","had","will","would","can","could",
-        "what","who","how","when","where","why","which","that","this",
-        "and","or","but","of","in","on","at","to","for","with","from",
-        "not","no","yes","so","very","just","also","about","up","out",
-    }
-    return [w for w in re.findall(r"\w+", text.lower()) if w not in STOP]
+    """Full tokenizer for BM25 — keeps all words including stop words."""
+    return re.findall(r"\w+", text.lower())
+
+# Stop words only for fallback matching (not for BM25)
+_STOP = {
+    "a","an","the","is","are","was","were","be","been","being",
+    "i","my","me","you","your","we","our","he","she","it","they",
+    "do","did","does","have","has","had","will","would","can","could",
+    "and","or","but","of","in","on","at","to","for","with","from",
+    "not","no","yes","so","very","just","also","about","up","out",
+    "real","true","actual",
+}
+
+def _content_tokens(text: str) -> set:
+    """Returns meaningful content words only (strips stop words)."""
+    return {w for w in re.findall(r"\w+", text.lower()) if w not in _STOP}
 
 
 # ── RAG Engine ────────────────────────────────────────────────────────────────
@@ -269,9 +276,29 @@ class CloneEngine:
         return self._fallback_extract(query, chunks), "Extracted from notes"
 
     def _fallback_extract(self, query: str, chunks: List[Dict[str, Any]]) -> str:
-        q_tok = {"your" if t == "ur" else t for t in tokenize(query)}
+        q_clean = query.lower().replace("ur ", "your ").replace("uh", "").strip()
+        # Synonym normalisation
+        q_clean = q_clean.replace("bugs", "errors").replace("bug", "error")\
+                         .replace("real ", "").replace("actual ", "")
+        q_all = set(re.findall(r"\w+", q_clean))
+        q_content = _content_tokens(q_clean)
 
-        # ── Try to match a Q&A pair ────────────────────────────────────────
+        # No content words at all → off-topic
+        if not q_content:
+            return "I don't have that in my notes."
+
+        # Queries where every content word is clearly off-topic
+        # (not present in any chunk) → return no notes
+        all_chunk_words: set = set()
+        for ch in chunks:
+            all_chunk_words.update(re.findall(r"\w+", ch["text"].lower()))
+        if not (q_content & all_chunk_words):
+            return "I don't have that in my notes."
+
+        # Threshold
+        min_ov = 1 if len(q_content) <= 2 else 2
+
+        # ── Try Q&A match ─────────────────────────────────────────────────
         qa = []
         for ch in chunks:
             pairs = re.findall(
@@ -281,28 +308,28 @@ class CloneEngine:
             for q_text, a_text in pairs:
                 a_clean = a_text.strip().split("\n\n")[0].strip()
                 a_clean = re.sub(r"\*+$", "", a_clean).strip()
-                q_toks = {"your" if t == "ur" else t for t in tokenize(q_text)}
-                ov = len(q_tok & q_toks)
-                # Require meaningful overlap — at least 2 content words
-                if ov >= 2:
+                q_t = set(re.findall(r"\w+", q_text.lower()))
+                # Match on CONTENT tokens only to avoid stop-word false positives
+                ov = len(q_content & _content_tokens(q_text))
+                if ov >= min_ov:
                     qa.append((ov, a_clean))
 
         if qa:
-            best_ov, best_a = max(qa, key=lambda x: x[0])
-            # Only use if overlap is strong enough relative to query length
-            if best_ov >= min(3, len(q_tok)):
-                return best_a
+            return max(qa, key=lambda x: x[0])[1]
 
-        # ── Fall back to best matching sentence ───────────────────────────
+        # ── Sentence fallback ─────────────────────────────────────────────
         sents = []
         for ch in chunks:
             text = re.sub(r"^#+\s*", "", ch["text"], flags=re.MULTILINE)
             text = re.sub(r"\*{0,2}[QA]:\s*", "", text)
+            text = re.sub(r"!\[.*?\]\(.*?\)", "", text)   # strip image tags
             for s in re.split(r"(?<=[.!?])\s+", text):
                 s = s.strip()
-                ov = len(q_tok & set(tokenize(s)))
-                # Require at least 3 overlapping words for a sentence match
-                if s and ov >= 3 and len(s) > 30:
+                # Skip lines that are still header/metadata-like
+                if re.match(r"^(#+|---|\|)", s):
+                    continue
+                ov = len(q_content & _content_tokens(s))
+                if s and ov >= min_ov and len(s) > 25:
                     sents.append((ov, s))
         if sents:
             return max(sents, key=lambda x: x[0])[1]
