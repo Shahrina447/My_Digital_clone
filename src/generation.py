@@ -59,14 +59,45 @@ _STOP_WORDS = {
     "do", "did", "does", "have", "has", "had", "will", "would", "can", "could",
     "and", "or", "but", "of", "in", "on", "at", "to", "for", "with",
     "not", "no", "yes", "so", "very", "just", "also", "about", "up", "out",
-    "tell", "what",
+    "tell", "what", "where", "when", "why", "how", "who", "which",
+    "did", "do", "does", "are", "is", "am", "was", "were",
 }
+
+
+def _normalize_for_match(text: str) -> str:
+    """Normalize text for exact or near-exact matching against FAQ questions."""
+    words = re.findall(r"\w+", text.lower())
+    filtered = [w for w in words if w not in _STOP_WORDS and len(w) > 1]
+    return " ".join(filtered)
 
 
 def _content_tokens(text: str) -> set[str]:
     """Extract meaningful content tokens, excluding common stop words."""
     words = re.findall(r"\w+", text.lower())
-    return {w for w in words if w not in _STOP_WORDS}
+    return {w for w in words if w not in _STOP_WORDS and len(w) > 1}
+
+
+def greeting_response(query: str) -> Optional[str]:
+    """Return a brief welcome for standalone greetings without invoking retrieval."""
+    normalized = re.sub(r"[\W_]+", " ", query.casefold()).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    if normalized in {
+        "hi",
+        "hello",
+        "hey",
+        "hiya",
+        "howdy",
+        "hello there",
+        "hi there",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    }:
+        return (
+            "Hi! I’m Shahrina Khan’s AI clone. Ask me about my background, "
+            "studies, projects, skills, or interests."
+        )
+    return None
 
 
 def format_context_for_prompt(results: List[RetrievalResult]) -> str:
@@ -123,6 +154,7 @@ class DigitalCloneGenerator:
         retrieved_results: List[RetrievalResult],
         history: Optional[List[Dict[str, str]]] = None,
         hf_model: Optional[str] = None,
+        all_context: Optional[List[RetrievalResult]] = None,
         temperature: float = 0.2,
         max_tokens: int = 350,
     ) -> Tuple[str, str]:
@@ -132,6 +164,10 @@ class DigitalCloneGenerator:
         clean_query = query.strip()
         if not clean_query:
             return "Please enter a question.", "—"
+
+        greeting = greeting_response(clean_query)
+        if greeting:
+            return greeting, "Greeting"
 
         if not retrieved_results:
             return "I don't have that in my notes.", "Strict Grounding (No context)"
@@ -194,14 +230,21 @@ class DigitalCloneGenerator:
                 print(f"[DigitalCloneGenerator] HF Inference error: {exc}")
 
         # ── Tier 3: High-Precision Extractive Fallback ────────────────────────
-        fallback_answer = self._extract_fallback(clean_query, retrieved_results)
+        search_space = all_context or retrieved_results
+        fallback_answer = self._extract_fallback(clean_query, retrieved_results, search_space)
         return fallback_answer, "Extracted from notes (Offline Fallback)"
 
-    def _extract_fallback(self, query: str, results: List[RetrievalResult]) -> str:
+    def _extract_fallback(
+        self,
+        query: str,
+        results: List[RetrievalResult],
+        search_space: Optional[List[RetrievalResult]] = None,
+    ) -> str:
         """
         Grounded rule-based text extraction when no API connection is available.
         """
-        q_norm = query.lower().replace("ur ", "your ").replace("uh", "").strip()
+        q_norm = re.sub(r"[^a-z0-9\s]", " ", query.lower())
+        q_norm = re.sub(r"\s+", " ", q_norm).strip()
         q_norm = q_norm.replace("bugs", "errors").replace("bug", "error")
         q_norm = q_norm.replace("goals", "future work aspirations").replace("goal", "future work")
         q_norm = q_norm.replace("leisure", "free time hobbies").replace("dishes", "cooking food")
@@ -211,6 +254,7 @@ class DigitalCloneGenerator:
             return "I am an AI clone of Shahrina Khan, not the real person. I answer only from Shahrina's own notes and documents. For anything important, please contact the real Shahrina directly."
 
         q_content = _content_tokens(q_norm)
+        source_results = search_space or results
 
         # Off-topic or empty content words
         if not q_content:
@@ -218,7 +262,7 @@ class DigitalCloneGenerator:
 
         # Check if query content words exist at all in any retrieved chunk
         all_words: set[str] = set()
-        for res in results:
+        for res in source_results:
             all_words.update(re.findall(r"\w+", res.chunk.text.lower()))
 
         if not (q_content & all_words):
@@ -226,9 +270,9 @@ class DigitalCloneGenerator:
 
         min_overlap = 1 if len(q_content) <= 2 else 2
 
-        # 1. Search for matching Q&A in FAQ chunks
+        # 1. Search for matching Q&A in FAQ chunks with a strong exact-question preference.
         qa_matches: List[Tuple[int, str]] = []
-        for res in results:
+        for res in source_results:
             pairs = re.findall(
                 r"\*{0,2}Q:\s*(.*?)\?[\*]{0,2}\s*\n?\s*A:\s*(.*?)(?=\*{0,2}Q:|\Z)",
                 res.chunk.text,
@@ -237,16 +281,29 @@ class DigitalCloneGenerator:
             for q_text, a_text in pairs:
                 a_clean = a_text.strip().split("\n\n")[0].strip()
                 a_clean = re.sub(r"\*+$", "", a_clean).strip()
-                overlap = len(q_content & _content_tokens(q_text))
-                if overlap >= min_overlap:
-                    qa_matches.append((overlap, a_clean))
+                q_text_norm = _normalize_for_match(q_text)
+                query_norm = _normalize_for_match(q_norm)
+                q_overlap = len(q_content & _content_tokens(q_text))
+                a_overlap = len(q_content & _content_tokens(a_clean))
+
+                if q_text_norm and query_norm:
+                    if q_text_norm == query_norm or query_norm in q_text_norm or q_text_norm in query_norm:
+                        q_overlap += 10
+
+                score = q_overlap + (a_overlap // 2)
+                if score >= min_overlap or (
+                    query_norm and q_text_norm and (
+                        query_norm in q_text_norm or q_text_norm in query_norm
+                    )
+                ):
+                    qa_matches.append((score, a_clean))
 
         if qa_matches:
             return max(qa_matches, key=lambda x: x[0])[1]
 
         # 2. Search for best matching sentence across retrieved chunks
         sentence_matches: List[Tuple[int, str]] = []
-        for res in results:
+        for res in source_results:
             clean_text = re.sub(r"^#+\s*", "", res.chunk.text, flags=re.MULTILINE)
             clean_text = re.sub(r"\*{0,2}[QA]:\s*", "", clean_text)
             clean_text = re.sub(r"!\[.*?\]\(.*?\)", "", clean_text)

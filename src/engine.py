@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.generation import DigitalCloneGenerator
+from src.generation import DigitalCloneGenerator, greeting_response
 from src.retrieval import HybridRetriever, RetrievalResult
 
 DEFAULT_HF_MODELS = [
@@ -66,8 +66,24 @@ class CloneEngine:
                 "comparison_table": "*Enter a question to compare retrieval modes.*",
             }
 
+        greeting = greeting_response(clean_query)
+        if greeting:
+            return {
+                "query": clean_query,
+                "answer": greeting,
+                "generated_by": "Greeting",
+                "mode": mode,
+                "chunks": [],
+                "chunks_formatted": "*Greeting received; no retrieval needed.*",
+                "comparison_table": "*No retrieval comparison for a greeting.*",
+            }
+
         # 1. Retrieve top-k chunks using the selected retrieval mode
         chunks = self.retriever.retrieve(clean_query, mode=mode, top_k=int(top_k))
+        all_chunks = [
+            RetrievalResult(chunk=chunk, score=0.0, rank=i + 1, retriever="Knowledge Base")
+            for i, chunk in enumerate(self.retriever.chunks)
+        ]
 
         # 2. Generate answer
         answer, generated_by = self.generator.generate(
@@ -75,6 +91,7 @@ class CloneEngine:
             retrieved_results=chunks,
             history=history,
             hf_model=hf_model,
+            all_context=all_chunks,
         )
 
         # 3. Format chunks for UI display
