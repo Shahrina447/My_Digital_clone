@@ -194,7 +194,20 @@ def generate_bot_reply(
         )
 
         updated_history = list(history) + [_make_message("assistant", result["answer"])]
-        badge_text = f"✨ Response Source: **{result['generated_by']}** &nbsp;|&nbsp; Retrieval Mode: **{result['mode']}**"
+        q_type = result.get("question_type", "general")
+        type_label = {
+            "personal_fact": "📋 Personal Fact",
+            "opinion": "💬 Opinion",
+            "out_of_scope": "🚫 Out of Scope",
+            "general": "🔍 General",
+            "greeting": "👋 Greeting",
+            "acknowledgment": "🙂 Acknowledgment",
+        }.get(q_type, q_type)
+        badge_text = (
+            f"✨ Response Source: **{result['generated_by']}** &nbsp;|&nbsp; "
+            f"Retrieval Mode: **{result['mode']}** &nbsp;|&nbsp; "
+            f"Question Type: **{type_label}**"
+        )
 
         return (
             updated_history,

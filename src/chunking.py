@@ -87,9 +87,15 @@ def chunk_text(
 
         # If this is a small trailing slice and we already have chunks,
         # merge it into the previous chunk to avoid tiny fragments.
+        # Cap the merged chunk at chunk_size + overlap to stay within ~300 words.
         if len(chunk_words) < min_chunk_size and chunks:
             prev_chunk = chunks[-1]
-            merged_words = words[start_idx - step : total_words]
+            remaining_words = words[start_idx:total_words]
+            prev_words = prev_chunk.text.split()
+            # Only append words that fit within the cap
+            cap = chunk_size + overlap
+            available_slots = max(0, cap - len(prev_words))
+            merged_words = prev_words + remaining_words[:available_slots]
             chunks[-1] = DocumentChunk(
                 chunk_id=prev_chunk.chunk_id,
                 source=prev_chunk.source,

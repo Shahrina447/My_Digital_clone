@@ -279,10 +279,12 @@ class HybridRetriever:
     def retrieve_dense(self, query: str, top_k: int = 5) -> List[RetrievalResult]:
         """Dense semantic search using normalized cosine similarity."""
         if self.chunk_embeddings is None or not self.chunks:
+            print("[HybridRetriever] Dense embeddings unavailable — falling back to BM25.")
             return self.retrieve_bm25(query, top_k=top_k)
 
         qv = self._embed_query(query)
         if qv is None:
+            print("[HybridRetriever] Query embedding failed — falling back to BM25.")
             return self.retrieve_bm25(query, top_k=top_k)
 
         if _NUMPY_AVAILABLE and isinstance(self.chunk_embeddings, np.ndarray):

@@ -190,24 +190,17 @@ class DigitalCloneGenerator:
         retrieved_results: List[RetrievalResult],
         history: Optional[List[Dict[str, str]]] = None,
         hf_model: Optional[str] = None,
-        all_context: Optional[List[RetrievalResult]] = None,
         temperature: float = 0.2,
         max_tokens: int = 350,
     ) -> Tuple[str, str]:
         """
         Generate grounded response. Returns (answer_text, generated_by_label).
+        Greetings and acknowledgments are handled upstream in engine.py;
+        this method only receives substantive queries.
         """
         clean_query = query.strip()
         if not clean_query:
             return "Please enter a question.", "—"
-
-        greeting = greeting_response(clean_query)
-        if greeting:
-            return greeting, "Greeting"
-
-        acknowledgment = acknowledgment_response(clean_query)
-        if acknowledgment:
-            return acknowledgment, "Conversation"
 
         if not retrieved_results:
             return "I don't have that in my notes.", "Strict Grounding (No context)"
@@ -270,8 +263,8 @@ class DigitalCloneGenerator:
                 print(f"[DigitalCloneGenerator] HF Inference error: {exc}")
 
         # ── Tier 3: High-Precision Extractive Fallback ────────────────────────
-        search_space = all_context or retrieved_results
-        fallback_answer = self._extract_fallback(clean_query, retrieved_results, search_space)
+        # Use only the retrieved top-k chunks to maintain strict grounding.
+        fallback_answer = self._extract_fallback(clean_query, retrieved_results, retrieved_results)
         return fallback_answer, "Extracted from notes (Offline Fallback)"
 
     def _extract_fallback(
@@ -288,6 +281,8 @@ class DigitalCloneGenerator:
         q_norm = q_norm.replace("bugs", "errors").replace("bug", "error")
         q_norm = q_norm.replace("goals", "future work aspirations").replace("goal", "future work")
         q_norm = q_norm.replace("leisure", "free time hobbies").replace("dishes", "cooking food")
+        # Normalise "tell me about X" / "describe X" / "explain X" → "what is X"
+        q_norm = re.sub(r"^(tell me about|describe|explain|give me info on|what do you know about)\s+", "what is ", q_norm)
 
         # Handle clone identity queries directly according to Rule 4
         if any(phrase in q_norm for phrase in ["are you real", "real shahrina", "real person", "ai clone", "are you an ai", "are you a clone"]):
@@ -303,7 +298,9 @@ class DigitalCloneGenerator:
         # Check if query content words exist at all in any retrieved chunk
         all_words: set[str] = set()
         for res in source_results:
-            all_words.update(re.findall(r"\w+", res.chunk.text.lower()))
+            all_words.update(
+                _content_tokens(" ".join(re.findall(r"\w+", res.chunk.text.lower())))
+            )
 
         if not (q_content & all_words):
             return "I don't have that in my notes."
@@ -350,15 +347,30 @@ class DigitalCloneGenerator:
         # 2. Search for best matching sentence across retrieved chunks
         sentence_matches: List[Tuple[int, str]] = []
         for res in source_results:
-            clean_text = re.sub(r"^#+\s*", "", res.chunk.text, flags=re.MULTILINE)
+            clean_text = res.chunk.text
+
+            # Remove markdown headings entirely (don't leave heading text as orphan sentences)
+            clean_text = re.sub(r"^#+\s+.*$", "", clean_text, flags=re.MULTILINE)
             clean_text = re.sub(r"\*{0,2}[QA]:\s*", "", clean_text)
             clean_text = re.sub(r"!\[.*?\]\(.*?\)", "", clean_text)
-            # Remove markdown bold/italic asterisks
+            # Remove bold/italic markers but keep the text
+            clean_text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", clean_text)
+            clean_text = re.sub(r"_{1,2}(.*?)_{1,2}", r"\1", clean_text)
+            # Remove any remaining lone asterisks
             clean_text = re.sub(r"\*+", "", clean_text)
+            # Remove table rows and horizontal rules
+            clean_text = re.sub(r"^\|.*\|.*$", "", clean_text, flags=re.MULTILINE)
+            clean_text = re.sub(r"^-{3,}$", "", clean_text, flags=re.MULTILINE)
+            # Collapse multiple blank lines
+            clean_text = re.sub(r"\n{2,}", "\n", clean_text)
 
-            for sentence in re.split(r"(?<=[.!?])\s+", clean_text):
+            for sentence in re.split(r"(?<=[.!?])\s+|\n", clean_text):
                 sentence = sentence.strip()
-                if not sentence or re.match(r"^(#+|---|\|)", sentence):
+                # Skip empty, very short, or structural lines
+                if not sentence or len(sentence) < 25:
+                    continue
+                # Skip lines that look like document titles or section labels (no verb/stop chars)
+                if re.match(r"^[A-Z][^.!?]{0,80}$", sentence) and ":" not in sentence and len(sentence.split()) < 8:
                     continue
                 # If question prefix remains before '?', take the answer portion
                 if "?" in sentence:
@@ -367,7 +379,7 @@ class DigitalCloneGenerator:
                         sentence = parts[1].strip()
 
                 overlap = len(q_content & _content_tokens(sentence))
-                if sentence and overlap >= min_overlap and len(sentence) > 20:
+                if sentence and overlap >= min_overlap and len(sentence) > 25:
                     sentence_matches.append((overlap, sentence))
 
         if sentence_matches:
