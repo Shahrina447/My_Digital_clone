@@ -118,24 +118,61 @@ CUSTOM_CSS = """
 }
 """
 
+# ── Gradio 6 Message Format Helpers ────────────────────────────────────────────
+
+def _extract_text(content: Any) -> str:
+    """
+    Extract plain text from a Gradio 6 chatbot message's 'content' field.
+    In Gradio 6, content is a list of content blocks: [{"type": "text", "text": "Hello"}].
+    In older versions, content was a plain string. This helper handles both.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(parts)
+    return str(content) if content else ""
+
+
+def _make_message(role: str, text: str) -> Dict[str, Any]:
+    """Build a Gradio 6 chatbot message dict with structured content blocks."""
+    return {"role": role, "content": [{"type": "text", "text": text}]}
+
+
+def _simplify_history(history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """
+    Convert Gradio 6 structured-content history into plain string-content history
+    for the RAG engine and generation layer, which expect {"role": ..., "content": "text"}.
+    """
+    return [
+        {"role": msg["role"], "content": _extract_text(msg["content"])}
+        for msg in history
+    ]
+
+
 # ── Event Handlers ────────────────────────────────────────────────────────────
 
-def user_submit(message: str, history: List[Dict[str, str]]) -> Tuple[str, List[Dict[str, str]]]:
+def user_submit(message: str, history: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
     """Appends user message to session chat history and clears the input box."""
     clean_msg = message.strip() if message else ""
     if not clean_msg:
         return "", history or []
-    new_history = list(history or []) + [{"role": "user", "content": clean_msg}]
+    new_history = list(history or []) + [_make_message("user", clean_msg)]
     return "", new_history
 
 
 @spaces.GPU(duration=60)
 def generate_bot_reply(
-    history: List[Dict[str, str]],
+    history: List[Dict[str, Any]],
     mode: str,
     top_k: int,
     hf_model: str,
-) -> Tuple[List[Dict[str, str]], str, str, str]:
+) -> Tuple[List[Dict[str, Any]], str, str, str]:
     """
     Orchestrates grounded retrieval and generation for the latest user turn.
     Returns: (updated_history, chunks_markdown, comparison_table, gen_badge)
@@ -143,8 +180,8 @@ def generate_bot_reply(
     if not history:
         return [], "*No query yet.*", "*Enter a question to compare modes.*", "—"
 
-    latest_user_message = history[-1]["content"]
-    previous_history = history[:-1]
+    latest_user_message = _extract_text(history[-1]["content"])
+    previous_history = _simplify_history(history[:-1])
 
     # Execute RAG pipeline through engine
     result = engine.ask(
@@ -155,7 +192,7 @@ def generate_bot_reply(
         hf_model=hf_model,
     )
 
-    updated_history = list(history) + [{"role": "assistant", "content": result["answer"]}]
+    updated_history = list(history) + [_make_message("assistant", result["answer"])]
     badge_text = f"✨ Response Source: **{result['generated_by']}** &nbsp;|&nbsp; Retrieval Mode: **{result['mode']}**"
 
     return (
@@ -166,7 +203,7 @@ def generate_bot_reply(
     )
 
 
-def clear_session() -> Tuple[List[Dict[str, str]], str, str, str, str]:
+def clear_session() -> Tuple[List[Dict[str, Any]], str, str, str, str]:
     """Clears chat history and resets panels for a fresh session."""
     return (
         [],
@@ -194,13 +231,13 @@ def create_chatbot() -> gr.Chatbot:
 
 def send_example_question(
     example_text: str,
-    history: List[Dict[str, str]],
+    history: List[Dict[str, Any]],
     mode: str,
     top_k: int,
     hf_model: str,
-) -> Tuple[List[Dict[str, str]], str, str, str]:
+) -> Tuple[List[Dict[str, Any]], str, str, str]:
     """Directly triggers retrieval and generation for a clicked example question."""
-    temp_history = list(history or []) + [{"role": "user", "content": example_text}]
+    temp_history = list(history or []) + [_make_message("user", example_text)]
     return generate_bot_reply(temp_history, mode, top_k, hf_model)
 
 
