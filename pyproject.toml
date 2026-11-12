@@ -1,7 +1,7 @@
 [project]
 name = "my-digital-clone"
 version = "0.1.0"
-description = "Add your description here"
+description = "Shahrina Khan's AI Digital Clone (Hybrid RAG)"
 readme = "README.md"
 authors = [
     { name = "Shahrina447", email = "23018020084@skt.umt.edu.pk" }
@@ -15,10 +15,8 @@ dependencies = [
     "huggingface-hub>=2.4.0",
     "python-dotenv>=1.2.4",
     "mistralai>=1.8.2",
+    "spaces",
 ]
 
-
-[build-system]
-requires = ["uv_build>=0.13.7,<0.14.0"]
-build-backend = "uv_build"
-
+[tool.uv]
+package = false
