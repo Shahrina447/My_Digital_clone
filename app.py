@@ -177,6 +177,22 @@ def clear_session() -> Tuple[List[Dict[str, str]], str, str, str, str]:
     )
 
 
+def create_chatbot() -> gr.Chatbot:
+    """Instantiate Chatbot safely across Gradio versions (4.x, 5.x, and 6.x)."""
+    import inspect
+    kwargs = {
+        "elem_id": "chatbot",
+        "height": 480,
+        "placeholder": "👋 Hello! I am Shahrina Khan's digital clone. Ask me anything about my academic journey, projects, coding habits, or future aspirations!",
+        "show_copy_button": True,
+        "bubble_full_width": False,
+        "type": "messages",
+    }
+    sig = inspect.signature(gr.Chatbot.__init__)
+    valid_args = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return gr.Chatbot(**valid_args)
+
+
 def send_example_question(
     example_text: str,
     history: List[Dict[str, str]],
@@ -198,7 +214,7 @@ theme = gr.themes.Soft(
     font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
 )
 
-with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)") as demo:
+with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)", theme=theme, css=CUSTOM_CSS) as demo:
 
     # 1. Mandatory Disclaimer Banner
     gr.HTML(
@@ -225,14 +241,7 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)") as demo:
 
         # ── LEFT: Modern Chatbot & Input ──────────────────────────────────────
         with gr.Column(scale=58):
-            chatbot = gr.Chatbot(
-                type="messages",
-                elem_id="chatbot",
-                height=480,
-                show_copy_button=True,
-                bubble_full_width=False,
-                placeholder="👋 Hello! I am Shahrina Khan's digital clone. Ask me anything about my academic journey, projects, coding habits, or future aspirations!",
-            )
+            chatbot = create_chatbot()
 
             # Bottom Input Bar (ChatGPT / Grok style)
             with gr.Row():
@@ -357,4 +366,4 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)") as demo:
         )
 
 if __name__ == "__main__":
-    demo.launch(theme=theme, css=CUSTOM_CSS)
+    demo.launch()
