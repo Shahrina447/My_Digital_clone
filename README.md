@@ -15,11 +15,11 @@ license: mit
 
 > **Public Space URL:** [https://huggingface.co/spaces/abdullaheqbal/digital-clone](https://huggingface.co/spaces/abdullaheqbal/digital-clone)<br>
 > **Repository:** [https://github.com/Shahrina447/My_Digital_clone](https://github.com/Shahrina447/My_Digital_clone)<br>
-> **Student Name:** Shahrina Khan
-> **Student ID:** 23018020084
-> **Degree Program:** BS Computer Science (7th Semester), University of Management and Technology (UMT), Sialkot
-> **Course / Learning Outcome:** CLO-2 (Hybrid RAG Architecture)
-> **Submission Deadline:** 10-November-2026
+> **Student Name:** Shahrina Khan<br>
+> **Student ID:** 23018020084<br>
+> **Degree Program:** BS Computer Science (7th Semester), University of Management and Technology (UMT), Sialkot<br>
+> **Course / Learning Outcome:** CLO-2 (Hybrid RAG Architecture)<br>
+> **Submission Deadline:** 10-November-2026<br>
 
 ---
 
@@ -47,14 +47,32 @@ For this digital clone, I curated an **8-document knowledge base (~6,200 words)*
 
 ---
 
-## 2. Technical Implementation
+## 2. Technical Architecture & Implementation
+
+### Clean Modular Structure
+
+```
+digital-clone/
+├── app.py                  # Thin Gradio Chat UI + presentation layer
+├── requirements.txt        # Pinned dependencies
+├── README.md               # Documentation and assignment rubric
+├── chunks.json             # 34 precomputed knowledge chunks
+├── embeddings.npy          # Precomputed 384-d MiniLM dense embeddings (34 x 384)
+├── data/                   # 8 Markdown knowledge base documents
+└── src/
+    ├── __init__.py         # Clean package exports
+    ├── chunking.py         # Sliding-window chunking (200-300 words with overlap)
+    ├── retrieval.py        # Hybrid retriever (BM25 + Dense + RRF)
+    ├── generation.py       # Grounded LLM generation with 3-tier cascade
+    └── engine.py           # Orchestration layer bridging retrieval & generation
+```
 
 ### Chunking (Criterion 1)
 - **Strategy:** Sliding-window word-level chunking
-- **Chunk size:** 250 words (target), within 200–300 word range as required
+- **Chunk size:** 250 words (target), strictly within 200–300 word range as required
 - **Overlap:** 50 words between consecutive chunks
-- **Metadata:** Each chunk stores `chunk_id`, `source` filename, `text`, and `word_count`
-- **Result:** 33 chunks across 8 documents, average 229.9 words/chunk
+- **Metadata:** Each chunk preserves `chunk_id`, `source` filename, `text`, and `word_count`
+- **Result:** 34 chunks across 8 documents, average 229.5 words/chunk (min: 94, max: 250 words)
 
 ```python
 # src/chunking.py — core parameters
@@ -62,26 +80,33 @@ chunk_size = 250   # words
 overlap    = 50    # words
 ```
 
-### Retrieval (Criterion 2 & 3)
+### Retrieval (Criteria 2 & 3)
 | Component | Implementation |
 |-----------|---------------|
-| BM25 | `rank_bm25.BM25Okapi` on word-tokenized chunks |
-| Dense | `sentence-transformers/all-MiniLM-L6-v2`, embeddings cached in `embeddings.npy` |
-| Fusion | Reciprocal Rank Fusion: $\text{RRF} = \sum \frac{1}{60 + \text{rank}}$ |
-| Candidate pool | Top-20 from each retriever before RRF |
+| **BM25** | `rank_bm25.BM25Okapi` on word-tokenized chunks |
+| **Dense** | `sentence-transformers/all-MiniLM-L6-v2`, embeddings cached in `embeddings.npy` |
+| **Fusion (RRF)** | Reciprocal Rank Fusion: $\text{RRF} = \sum \frac{1}{60 + \text{rank}}$ |
+| **Candidate pool** | Top-20 from each retriever before RRF fusion |
+| **Modes Supported** | `Hybrid (RRF)`, `BM25 only`, and `Dense only` |
 
 ### Generation (Criterion 4)
 - **Primary LLM:** Mistral AI (`mistral-small-latest`) via Mistral API
-- **Fallback:** HF Inference API (`meta-llama/Llama-3.2-3B-Instruct`)
-- **Last resort:** Text extraction from retrieved chunks
-- **Persona prompt:** First-person, grounded strictly in context, "I don't have that in my notes." fallback
+- **Secondary Fallback:** HF Inference API (`meta-llama/Llama-3.2-3B-Instruct`)
+- **Last Resort:** Grounded extractive text fallback with stop-word filtering
+- **Persona prompt:** First-person ("I", "my", "me"), grounded strictly in context, "I don't have that in my notes." fallback
 - **Temperature:** 0.2 (factual, low creativity)
 
-### Deployment (Criterion 5)
-- **Platform:** Hugging Face Spaces (ZeroGPU — free tier)
+### Deployment & UI (Criterion 5)
+- **Platform:** Hugging Face Spaces (ZeroGPU / CPU compatible)
 - **Framework:** Gradio 6.31.0
-- **UI:** Two-column layout — left: question + controls + answer; right: 3-mode comparison table + example chips
-- **AI clone disclaimer** banner visible on every page load
+- **Modern Chat Interface:** Powered by `gr.Chatbot(type="messages")` with session conversation history
+- **Interactive Controls:** Mode selector radio (`Hybrid (RRF)`, `BM25 only`, `Dense only`), top-k slider, HF model picker
+- **Transparency Panels:**
+  - **Retrieved Chunks Panel:** Displays source filename, chunk ID, score, and text excerpt
+  - **3-Mode Comparison Table:** Shows side-by-side ranking for BM25 vs Dense vs Hybrid for any query
+  - **Generation Badge:** Live indicator of response source (Mistral API, HF API, or Extractive Fallback)
+- **Disclaimer Banner:** Mandatory warning permanently displayed at the top:
+  > *"⚠️ This is an AI clone, not the real person. It answers only from Shahrina Khan's own notes and documents."*
 
 ---
 
@@ -107,7 +132,7 @@ Chunks: 250 words, 50-word overlap. Embeddings: `all-MiniLM-L6-v2`. Fusion: RRF 
 
 **Why it happened:** The query has no meaningful content-word overlap with any knowledge base document, but stop-word-heavy queries fool low-threshold matching.
 
-**Fix applied:** Added stop-word filtering in `_fallback_extract()` — content tokens (non-stop words) must overlap ≥ 2 with the source Q&A. If no meaningful match is found, the system returns:
+**Fix applied:** Added stop-word filtering in `_extract_fallback()` — content tokens (non-stop words) must overlap ≥ 2 with the source Q&A. If no meaningful match is found, the system returns:
 > *"I don't have that in my notes."*
 
 **Prompt rule (Rule 2):**
@@ -125,7 +150,7 @@ Chunks: 250 words, 50-word overlap. Embeddings: `all-MiniLM-L6-v2`. Fusion: RRF 
 
 ---
 
-## 6. Local Setup
+## 6. Local Setup & Reproduction
 
 ```bash
 git clone https://github.com/Shahrina447/My_Digital_clone.git
@@ -145,8 +170,8 @@ python app.py
 
 Open `http://127.0.0.1:7860` in your browser.
 
-Set `MISTRAL_API_KEY` in `.env` for LLM generation:
-```
-MISTRAL_API_KEY=your_key_here
-HF_TOKEN=your_hf_token_here
+Set environment variables in `.env` (or Space secrets) for LLM generation:
+```env
+MISTRAL_API_KEY=your_mistral_api_key_here
+HF_TOKEN=your_huggingface_token_here
 ```

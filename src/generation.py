@@ -1,127 +1,277 @@
 """
 generation.py - Grounded LLM Response Generator for Digital Clone RAG.
 
-Assignment Requirements (Criterion 4 & Appendix):
+Assignment Requirements (Criterion 4):
 1. First-person persona prompt representing Shahrina Khan.
-2. Strict grounding: answers ONLY using the retrieved context.
-3. Honest fallback: replies "I don't have that in my notes." if answer is absent.
-4. Uses Hugging Face Inference API via huggingface_hub.InferenceClient.
-5. Reads secret from HF_TOKEN environment variable (or .env locally).
+2. Strict grounding: answers ONLY using retrieved context.
+3. If information is missing -> reply exactly: "I don't have that in my notes."
+4. Generation cascade:
+   - Primary: Mistral API (via mistralai client)
+   - Secondary: Hugging Face Inference API (via huggingface_hub.InferenceClient)
+   - Last Resort: High-precision extractive text fallback
+5. API keys read from environment variables (MISTRAL_API_KEY, HF_TOKEN).
 """
 
 from __future__ import annotations
 import os
-from typing import List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
-from dotenv import load_dotenv
-from huggingface_hub import InferenceClient
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+# Try importing mistralai
+try:
+    from mistralai import Mistral as _MistralClient
+    _MISTRAL_AVAILABLE = True
+except Exception:
+    _MistralClient = None  # type: ignore
+    _MISTRAL_AVAILABLE = False
+
+# Try importing huggingface_hub
+try:
+    from huggingface_hub import InferenceClient as _HFInferenceClient
+    _HF_AVAILABLE = True
+except Exception:
+    _HFInferenceClient = None  # type: ignore
+    _HF_AVAILABLE = False
 
 from src.retrieval import RetrievalResult
 
-# Load local .env if present
-load_dotenv()
-
-# System persona prompt customized for Shahrina Khan
+# ── Persona Prompt ────────────────────────────────────────────────────────────
 SYSTEM_PERSONA_PROMPT = """You are the AI clone of Shahrina Khan, a final-year BS Computer Science student at UMT Sialkot (Session 2023-2027).
 Speak in the first person ("I", "my", "me"), in a natural, polite, and authentic tone.
 
 Rules:
 1. Answer ONLY using the CONTEXT provided below. It comes directly from my own documents.
-2. If the context does not contain enough information to answer the question, say: "I don't have that in my notes." Do not guess, speculate, or invent facts about me.
-3. Never share phone numbers, home addresses, CNIC, passwords, or sensitive details.
+2. If the context does not contain enough information to answer the question, say exactly: "I don't have that in my notes." Do not speculate, guess, or invent any facts about me.
+3. Never share phone numbers, home addresses, CNIC, passwords, or private contact details.
 4. If asked whether you are the real person, clearly state that you are an AI clone of Shahrina Khan, not the real person.
 5. Keep your response direct, clear, and faithful to the source context."""
 
+# Stop words for extractive fallback filtering
+_STOP_WORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "i", "my", "me", "you", "your", "we", "our", "he", "she", "it", "they",
+    "do", "did", "does", "have", "has", "had", "will", "would", "can", "could",
+    "and", "or", "but", "of", "in", "on", "at", "to", "for", "with",
+    "not", "no", "yes", "so", "very", "just", "also", "about", "up", "out",
+    "tell", "what",
+}
 
-def format_context(retrieved_results: List[RetrievalResult]) -> str:
-    """
-    Format retrieved chunks into a clean context block with metadata citations.
-    """
-    if not retrieved_results:
+
+def _content_tokens(text: str) -> set[str]:
+    """Extract meaningful content tokens, excluding common stop words."""
+    words = re.findall(r"\w+", text.lower())
+    return {w for w in words if w not in _STOP_WORDS}
+
+
+def format_context_for_prompt(results: List[RetrievalResult]) -> str:
+    """Format retrieved chunks into a clean, numbered context block."""
+    if not results:
         return "No relevant context found in documents."
 
-    context_blocks = []
-    for res in retrieved_results:
+    blocks = []
+    for res in results:
         header = f"[Source: {res.chunk.source} | Chunk: {res.chunk.chunk_id} | Score: {res.score:.4f}]"
-        context_blocks.append(f"{header}\n{res.chunk.text.strip()}")
+        blocks.append(f"{header}\n{res.chunk.text.strip()}")
 
-    return "\n\n---\n\n".join(context_blocks)
+    return "\n\n---\n\n".join(blocks)
 
 
 class DigitalCloneGenerator:
     """
-    Manages grounded generation using Hugging Face Inference API.
+    Multi-tier response generator with cascading fallbacks:
+    Mistral API -> Hugging Face Inference API -> Extractive Text Fallback.
     """
 
     def __init__(
         self,
-        model_name: str = "meta-llama/Llama-3.2-3B-Instruct",
-        hf_token: Optional[str] = None,
+        mistral_model: str = "mistral-small-latest",
+        hf_model: str = "meta-llama/Llama-3.2-3B-Instruct",
     ) -> None:
-        self.model_name = os.environ.get("HF_MODEL", model_name)
-        self.hf_token = hf_token or os.environ.get("HF_TOKEN")
-        self.client: Optional[InferenceClient] = None
+        self.mistral_model = os.environ.get("MISTRAL_MODEL", mistral_model)
+        self.hf_model = os.environ.get("HF_MODEL", hf_model)
+        self.mistral_key = os.environ.get("MISTRAL_API_KEY")
+        self.hf_token = os.environ.get("HF_TOKEN")
 
-        if self.hf_token:
-            self.client = InferenceClient(token=self.hf_token)
-        else:
-            print("[DigitalCloneGenerator] Warning: HF_TOKEN not found in environment. Set it in .env or as a Space secret.")
+        self._mistral_client: Any = None
+        self._hf_client: Any = None
 
-    def generate_response(
+    def _get_mistral_client(self) -> Any:
+        if self._mistral_client is None and _MISTRAL_AVAILABLE and self.mistral_key:
+            try:
+                self._mistral_client = _MistralClient(api_key=self.mistral_key)
+            except Exception as e:
+                print(f"[DigitalCloneGenerator] Mistral client init failed: {e}")
+        return self._mistral_client
+
+    def _get_hf_client(self) -> Any:
+        if self._hf_client is None and _HF_AVAILABLE and self.hf_token:
+            try:
+                self._hf_client = _HFInferenceClient(token=self.hf_token)
+            except Exception as e:
+                print(f"[DigitalCloneGenerator] HF client init failed: {e}")
+        return self._hf_client
+
+    def generate(
         self,
         query: str,
         retrieved_results: List[RetrievalResult],
+        history: Optional[List[Dict[str, str]]] = None,
+        hf_model: Optional[str] = None,
         temperature: float = 0.2,
-        max_new_tokens: int = 512,
-    ) -> str:
+        max_tokens: int = 350,
+    ) -> Tuple[str, str]:
         """
-        Generate a first-person grounded response based strictly on retrieved chunks.
+        Generate grounded response. Returns (answer_text, generated_by_label).
         """
-        context_str = format_context(retrieved_results)
+        clean_query = query.strip()
+        if not clean_query:
+            return "Please enter a question.", "—"
 
-        # Check for empty retrieval
         if not retrieved_results:
-            return "I don't have that in my notes."
+            return "I don't have that in my notes.", "Strict Grounding (No context)"
 
-        user_content = f"""CONTEXT:
-{context_str}
+        context_str = format_context_for_prompt(retrieved_results)
 
-QUESTION:
-{query}
+        # Build prompt messages
+        user_message_content = (
+            f"CONTEXT:\n{context_str}\n\n"
+            f"QUESTION:\n{clean_query}\n\n"
+            "Answer in the first person as Shahrina Khan using only the context above:"
+        )
 
-Please answer the question as Shahrina Khan in the first person using only the context above:"""
+        messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PERSONA_PROMPT}]
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PERSONA_PROMPT},
-            {"role": "user", "content": user_content},
-        ]
+        # Append recent session conversation history if provided (last 2 user/assistant turns)
+        if history:
+            recent_turns = history[-4:]
+            for turn in recent_turns:
+                role = turn.get("role")
+                content = turn.get("content")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
 
-        # If client is configured, call Hugging Face Inference API
-        if self.client:
+        # Finally, append current grounded turn
+        messages.append({"role": "user", "content": user_message_content})
+
+        # ── Tier 1: Mistral API ───────────────────────────────────────────────
+        mistral_client = self._get_mistral_client()
+        if mistral_client is not None:
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
+                resp = mistral_client.chat.complete(
+                    model=self.mistral_model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=max_new_tokens,
+                    max_tokens=max_tokens,
                 )
-                answer = response.choices[0].message.content.strip()
-                return answer
-            except Exception as e:
-                print(f"[DigitalCloneGenerator] HF API Error: {e}")
-                # If API call fails (rate limit, model loading, etc.), provide clear feedback
-                return (
-                    f"*(Hugging Face Inference API notice: {e})*\n\n"
-                    f"**Extracted Notes Preview:**\n"
-                    f"{retrieved_results[0].chunk.text[:300]}..."
-                )
+                answer = resp.choices[0].message.content
+                if isinstance(answer, str) and answer.strip():
+                    return answer.strip(), f"Mistral API · `{self.mistral_model}`"
+            except Exception as exc:
+                print(f"[DigitalCloneGenerator] Mistral API error: {exc}")
 
-        # Fallback if no HF_TOKEN is provided
-        return (
-            "*(HF_TOKEN not set. To enable live LLM generation, set your HF_TOKEN in Space secrets or a local .env file.)*\n\n"
-            f"**Top Retrieved Context ({retrieved_results[0].chunk.source}):**\n"
-            f"> {retrieved_results[0].chunk.text[:350]}..."
-        )
+        # ── Tier 2: Hugging Face Inference API ────────────────────────────────
+        hf_client = self._get_hf_client()
+        target_hf_model = hf_model or self.hf_model
+        if hf_client is not None:
+            try:
+                resp = hf_client.chat.completions.create(
+                    model=target_hf_model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                answer = resp.choices[0].message.content
+                if isinstance(answer, str) and answer.strip():
+                    short_name = target_hf_model.split("/")[-1]
+                    return answer.strip(), f"HF Inference API · `{short_name}`"
+            except Exception as exc:
+                print(f"[DigitalCloneGenerator] HF Inference error: {exc}")
+
+        # ── Tier 3: High-Precision Extractive Fallback ────────────────────────
+        fallback_answer = self._extract_fallback(clean_query, retrieved_results)
+        return fallback_answer, "Extracted from notes (Offline Fallback)"
+
+    def _extract_fallback(self, query: str, results: List[RetrievalResult]) -> str:
+        """
+        Grounded rule-based text extraction when no API connection is available.
+        """
+        q_norm = query.lower().replace("ur ", "your ").replace("uh", "").strip()
+        q_norm = q_norm.replace("bugs", "errors").replace("bug", "error")
+        q_norm = q_norm.replace("goals", "future work aspirations").replace("goal", "future work")
+        q_norm = q_norm.replace("leisure", "free time hobbies").replace("dishes", "cooking food")
+
+        # Handle clone identity queries directly according to Rule 4
+        if any(phrase in q_norm for phrase in ["are you real", "real shahrina", "real person", "ai clone", "are you an ai", "are you a clone"]):
+            return "I am an AI clone of Shahrina Khan, not the real person. I answer only from Shahrina's own notes and documents. For anything important, please contact the real Shahrina directly."
+
+        q_content = _content_tokens(q_norm)
+
+        # Off-topic or empty content words
+        if not q_content:
+            return "I don't have that in my notes."
+
+        # Check if query content words exist at all in any retrieved chunk
+        all_words: set[str] = set()
+        for res in results:
+            all_words.update(re.findall(r"\w+", res.chunk.text.lower()))
+
+        if not (q_content & all_words):
+            return "I don't have that in my notes."
+
+        min_overlap = 1 if len(q_content) <= 2 else 2
+
+        # 1. Search for matching Q&A in FAQ chunks
+        qa_matches: List[Tuple[int, str]] = []
+        for res in results:
+            pairs = re.findall(
+                r"\*{0,2}Q:\s*(.*?)\?[\*]{0,2}\s*\n?\s*A:\s*(.*?)(?=\*{0,2}Q:|\Z)",
+                res.chunk.text,
+                flags=re.DOTALL,
+            )
+            for q_text, a_text in pairs:
+                a_clean = a_text.strip().split("\n\n")[0].strip()
+                a_clean = re.sub(r"\*+$", "", a_clean).strip()
+                overlap = len(q_content & _content_tokens(q_text))
+                if overlap >= min_overlap:
+                    qa_matches.append((overlap, a_clean))
+
+        if qa_matches:
+            return max(qa_matches, key=lambda x: x[0])[1]
+
+        # 2. Search for best matching sentence across retrieved chunks
+        sentence_matches: List[Tuple[int, str]] = []
+        for res in results:
+            clean_text = re.sub(r"^#+\s*", "", res.chunk.text, flags=re.MULTILINE)
+            clean_text = re.sub(r"\*{0,2}[QA]:\s*", "", clean_text)
+            clean_text = re.sub(r"!\[.*?\]\(.*?\)", "", clean_text)
+            # Remove markdown bold/italic asterisks
+            clean_text = re.sub(r"\*+", "", clean_text)
+
+            for sentence in re.split(r"(?<=[.!?])\s+", clean_text):
+                sentence = sentence.strip()
+                if not sentence or re.match(r"^(#+|---|\|)", sentence):
+                    continue
+                # If question prefix remains before '?', take the answer portion
+                if "?" in sentence:
+                    parts = sentence.split("?", 1)
+                    if len(parts) > 1 and len(parts[1].strip()) > 15:
+                        sentence = parts[1].strip()
+
+                overlap = len(q_content & _content_tokens(sentence))
+                if sentence and overlap >= min_overlap and len(sentence) > 20:
+                    sentence_matches.append((overlap, sentence))
+
+        if sentence_matches:
+            best_sentence = max(sentence_matches, key=lambda x: x[0])[1]
+            return re.sub(r"^\W+", "", best_sentence).strip()
+
+        return "I don't have that in my notes."
 
 
 if __name__ == "__main__":
@@ -131,14 +281,18 @@ if __name__ == "__main__":
 
     from src.retrieval import HybridRetriever
 
-    retriever = HybridRetriever(data_dir="data", embeddings_path="embeddings.npy")
+    retriever = HybridRetriever(data_dir="data")
     generator = DigitalCloneGenerator()
 
-    sample_query = "What is DeadlineOS and what problem does it solve?"
-    print(f"\nQuery: {sample_query}")
+    test_questions = [
+        "What is DeadlineOS and what problem does it solve?",
+        "Are you the real Shahrina Khan?",
+        "What is your favourite color on Mars?",
+    ]
 
-    results = retriever.retrieve(sample_query, mode="Hybrid", top_k=3)
-    response = generator.generate_response(sample_query, results)
-
-    print("\n--- Response ---")
-    print(response)
+    for q in test_questions:
+        print(f"\nQuestion: {q}")
+        chunks = retriever.retrieve(q, mode="Hybrid (RRF)", top_k=3)
+        ans, gen_by = generator.generate(q, chunks)
+        print(f"[{gen_by}]")
+        print(f"Answer: {ans}")

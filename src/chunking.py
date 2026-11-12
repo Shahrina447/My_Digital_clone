@@ -8,7 +8,7 @@ Assignment Requirements (Criterion 1):
 """
 
 from __future__ import annotations
-import glob
+import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,6 +24,15 @@ class DocumentChunk:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DocumentChunk:
+        return cls(
+            chunk_id=data["chunk_id"],
+            source=data["source"],
+            text=data["text"],
+            word_count=data.get("word_count", len(data["text"].split())),
+        )
 
 
 def chunk_text(
@@ -147,12 +156,50 @@ def load_and_chunk_documents(
     return all_chunks
 
 
+def save_chunks_json(chunks: List[DocumentChunk], json_path: str = "chunks.json") -> None:
+    """Save DocumentChunk objects to JSON file."""
+    data = [c.to_dict() for c in chunks]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_chunks_json(json_path: str = "chunks.json") -> List[DocumentChunk]:
+    """Load DocumentChunk objects from JSON file."""
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return [DocumentChunk.from_dict(item) for item in data]
+
+
+def get_or_create_chunks(
+    data_dir: str = "data",
+    chunks_path: str = "chunks.json",
+    chunk_size: int = 250,
+    overlap: int = 50,
+    force_recompute: bool = False,
+) -> List[DocumentChunk]:
+    """
+    Load precomputed chunks if available, or compute and cache them.
+    """
+    p = Path(chunks_path)
+    if p.exists() and not force_recompute:
+        try:
+            chunks = load_chunks_json(str(p))
+            if chunks:
+                return chunks
+        except Exception as e:
+            print(f"[chunking] Failed to load '{chunks_path}': {e}. Recomputing...")
+
+    chunks = load_and_chunk_documents(data_dir=data_dir, chunk_size=chunk_size, overlap=overlap)
+    save_chunks_json(chunks, json_path=str(p))
+    return chunks
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Executing Document Chunking Pipeline...")
     print("=" * 60)
 
-    chunks = load_and_chunk_documents(data_dir="data", chunk_size=250, overlap=50)
+    chunks = get_or_create_chunks(data_dir="data", chunks_path="chunks.json")
 
     word_counts = [c.word_count for c in chunks]
     doc_sources = sorted(list(set(c.source for c in chunks)))
