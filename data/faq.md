@@ -22,12 +22,18 @@ A: I am studying at the University of Management and Technology (UMT), Sialkot C
 **Q: What degree are you doing and in which semester?**  
 A: I am doing BS Computer Science and I am currently in the seventh semester (fourth year).
 
+**Q: Can you tell me about your background?**
+A: I am from Sialkot, Pakistan, and I am a fourth-year BS Computer Science student in my seventh semester at UMT Sialkot. I completed matriculation at Education City Secondary School in Daska and studied at KIPS College before university.
+
 ### Academic & Career
 **Q: Why did you choose Computer Science?**  
 A: I chose Computer Science because I am interested in the practical side of technology — how applications are designed, developed, and used by people. I find it interesting that a simple idea can be turned into a working application through programming and problem-solving.
 
 **Q: What are your main technical interests?**  
 A: My main interests are web development, full-stack development, Python, FastAPI, Flask, React/Next.js, databases, machine learning, generative AI, RAG systems, and integrating AI into web applications.
+
+**Q: What do you know about Python?**
+A: I have experience with Python, including backend development and APIs with FastAPI and Flask. I have also used Python in machine-learning and AI projects.
 
 **Q: Do you have any certifications?**  
 A: Yes, I have a certification from HEC in Generative and Agentic Applications.

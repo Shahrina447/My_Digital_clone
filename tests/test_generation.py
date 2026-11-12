@@ -25,6 +25,23 @@ class CloneEngineFallbackTests(unittest.TestCase):
         self.assertIn('Computer Science', result['answer'])
         self.assertNotIn('tutorial hell', result['answer'].lower())
 
+    def test_background_question_returns_background_summary(self):
+        result = self.engine.ask("What's your background?", mode='Hybrid (RRF)', top_k=3)
+        self.assertIn('fourth-year BS Computer Science student', result['answer'])
+        self.assertIn('UMT Sialkot', result['answer'])
+        self.assertNotIn('###', result['answer'])
+
+    def test_python_question_returns_profile_skills_not_junior_advice(self):
+        result = self.engine.ask('What do you know about Python?', mode='Hybrid (RRF)', top_k=3)
+        self.assertIn('FastAPI and Flask', result['answer'])
+        self.assertNotIn('fundamentals before', result['answer'].lower())
+
+    def test_informal_project_question_matches_projects_faq(self):
+        result = self.engine.ask('What project you have dont yet?', mode='Hybrid (RRF)', top_k=3)
+        self.assertIn('DeadlineOS', result['answer'])
+        self.assertIn('Verdade', result['answer'])
+        self.assertNotIn('###', result['answer'])
+
     def test_standalone_greeting_gets_welcome_without_retrieval(self):
         result = self.engine.ask('Hi!')
         self.assertIn("AI clone", result['answer'])

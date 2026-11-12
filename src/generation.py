@@ -59,21 +59,31 @@ _STOP_WORDS = {
     "do", "did", "does", "have", "has", "had", "will", "would", "can", "could",
     "and", "or", "but", "of", "in", "on", "at", "to", "for", "with",
     "not", "no", "yes", "so", "very", "just", "also", "about", "up", "out",
-    "tell", "what", "where", "when", "why", "how", "who", "which",
+    "tell", "what", "where", "when", "why", "how", "who", "which", "whats",
     "did", "do", "does", "are", "is", "am", "was", "were",
+    "know", "dont", "yet", "done", "kind", "worked",
 }
+
+
+def _normalize_token(word: str) -> str:
+    """Normalize common English plurals so conversational variants match FAQs."""
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
 
 
 def _normalize_for_match(text: str) -> str:
     """Normalize text for exact or near-exact matching against FAQ questions."""
-    words = re.findall(r"\w+", text.lower())
+    words = [_normalize_token(word) for word in re.findall(r"\w+", text.lower())]
     filtered = [w for w in words if w not in _STOP_WORDS and len(w) > 1]
     return " ".join(filtered)
 
 
 def _content_tokens(text: str) -> set[str]:
     """Extract meaningful content tokens, excluding common stop words."""
-    words = re.findall(r"\w+", text.lower())
+    words = [_normalize_token(word) for word in re.findall(r"\w+", text.lower())]
     return {w for w in words if w not in _STOP_WORDS and len(w) > 1}
 
 
@@ -280,6 +290,12 @@ class DigitalCloneGenerator:
             )
             for q_text, a_text in pairs:
                 a_clean = a_text.strip().split("\n\n")[0].strip()
+                a_clean = re.sub(
+                    r"(?:^|\s)#{1,6}\s+.*?(?=\s+\*{0,2}Q:|\Z)",
+                    "",
+                    a_clean,
+                    flags=re.DOTALL,
+                ).strip()
                 a_clean = re.sub(r"\*+$", "", a_clean).strip()
                 q_text_norm = _normalize_for_match(q_text)
                 query_norm = _normalize_for_match(q_norm)
@@ -290,7 +306,7 @@ class DigitalCloneGenerator:
                     if q_text_norm == query_norm or query_norm in q_text_norm or q_text_norm in query_norm:
                         q_overlap += 10
 
-                score = q_overlap + (a_overlap // 2)
+                score = (q_overlap * 2) + a_overlap
                 if score >= min_overlap or (
                     query_norm and q_text_norm and (
                         query_norm in q_text_norm or q_text_norm in query_norm
