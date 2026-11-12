@@ -9,7 +9,11 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.generation import DigitalCloneGenerator, greeting_response
+from src.generation import (
+    DigitalCloneGenerator,
+    acknowledgment_response,
+    greeting_response,
+)
 from src.retrieval import HybridRetriever, RetrievalResult
 
 DEFAULT_HF_MODELS = [
@@ -76,6 +80,18 @@ class CloneEngine:
                 "chunks": [],
                 "chunks_formatted": "*Greeting received; no retrieval needed.*",
                 "comparison_table": "*No retrieval comparison for a greeting.*",
+            }
+
+        acknowledgment = acknowledgment_response(clean_query)
+        if acknowledgment:
+            return {
+                "query": clean_query,
+                "answer": acknowledgment,
+                "generated_by": "Conversation",
+                "mode": mode,
+                "chunks": [],
+                "chunks_formatted": "*No retrieval needed for this conversational reply.*",
+                "comparison_table": "*No retrieval comparison for this conversational reply.*",
             }
 
         # 1. Retrieve top-k chunks using the selected retrieval mode

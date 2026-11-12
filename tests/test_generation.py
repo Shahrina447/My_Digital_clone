@@ -48,6 +48,17 @@ class CloneEngineFallbackTests(unittest.TestCase):
         self.assertEqual(result['chunks'], [])
         self.assertEqual(result['generated_by'], 'Greeting')
 
+    def test_positive_acknowledgment_gets_conversational_reply(self):
+        result = self.engine.ask('Ahnnn..... Thats great!')
+        self.assertIn("glad that was helpful", result['answer'])
+        self.assertEqual(result['chunks'], [])
+        self.assertEqual(result['generated_by'], 'Conversation')
+
+    def test_substantive_question_with_positive_word_still_uses_retrieval(self):
+        result = self.engine.ask('What is a great project you have worked on?')
+        self.assertIn('DeadlineOS', result['answer'])
+        self.assertNotEqual(result['generated_by'], 'Conversation')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -110,6 +110,32 @@ def greeting_response(query: str) -> Optional[str]:
     return None
 
 
+def acknowledgment_response(query: str) -> Optional[str]:
+    """Respond naturally to short thanks or positive feedback."""
+    words = re.findall(r"\w+", query.casefold())
+    words = [
+        "ah" if re.fullmatch(r"a+h+n*", word) else
+        "uh" if re.fullmatch(r"u+h+", word) else
+        "hmm" if re.fullmatch(r"h+m+", word) else
+        "wow" if re.fullmatch(r"w+o+w+", word) else
+        word
+        for word in words
+    ]
+    if not words or len(words) > 7:
+        return None
+
+    fillers = {"ah", "ahn", "ahh", "hmm", "uh", "wow", "that", "thats", "is", "so", "really"}
+    positive = {"great", "awesome", "nice", "cool", "amazing", "wonderful", "fantastic", "good"}
+    gratitude = {"thanks", "thank", "you", "welcome"}
+    word_set = set(words)
+
+    if word_set & positive and word_set <= fillers | positive:
+        return "Thanks! I’m glad that was helpful. What else would you like to know?"
+    if word_set & {"thanks", "thank"} and word_set <= fillers | gratitude:
+        return "You’re welcome! What else would you like to know?"
+    return None
+
+
 def format_context_for_prompt(results: List[RetrievalResult]) -> str:
     """Format retrieved chunks into a clean, numbered context block."""
     if not results:
@@ -178,6 +204,10 @@ class DigitalCloneGenerator:
         greeting = greeting_response(clean_query)
         if greeting:
             return greeting, "Greeting"
+
+        acknowledgment = acknowledgment_response(clean_query)
+        if acknowledgment:
+            return acknowledgment, "Conversation"
 
         if not retrieved_results:
             return "I don't have that in my notes.", "Strict Grounding (No context)"
