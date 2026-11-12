@@ -180,27 +180,39 @@ def generate_bot_reply(
     if not history:
         return [], "*No query yet.*", "*Enter a question to compare modes.*", "—"
 
-    latest_user_message = _extract_text(history[-1]["content"])
-    previous_history = _simplify_history(history[:-1])
+    try:
+        latest_user_message = _extract_text(history[-1]["content"])
+        previous_history = _simplify_history(history[:-1])
 
-    # Execute RAG pipeline through engine
-    result = engine.ask(
-        query=latest_user_message,
-        history=previous_history,
-        mode=mode,
-        top_k=top_k,
-        hf_model=hf_model,
-    )
+        # Execute RAG pipeline through engine
+        result = engine.ask(
+            query=latest_user_message,
+            history=previous_history,
+            mode=mode,
+            top_k=top_k,
+            hf_model=hf_model,
+        )
 
-    updated_history = list(history) + [_make_message("assistant", result["answer"])]
-    badge_text = f"✨ Response Source: **{result['generated_by']}** &nbsp;|&nbsp; Retrieval Mode: **{result['mode']}**"
+        updated_history = list(history) + [_make_message("assistant", result["answer"])]
+        badge_text = f"✨ Response Source: **{result['generated_by']}** &nbsp;|&nbsp; Retrieval Mode: **{result['mode']}**"
 
-    return (
-        updated_history,
-        result["chunks_formatted"],
-        result["comparison_table"],
-        badge_text,
-    )
+        return (
+            updated_history,
+            result["chunks_formatted"],
+            result["comparison_table"],
+            badge_text,
+        )
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        error_msg = f"⚠️ Sorry, I encountered an error while processing your question: {exc}"
+        updated_history = list(history) + [_make_message("assistant", error_msg)]
+        return (
+            updated_history,
+            f"*Error during retrieval: {exc}*",
+            "*Error generating comparison table.*",
+            "⚠️ Error",
+        )
 
 
 def clear_session() -> Tuple[List[Dict[str, Any]], str, str, str, str]:
@@ -229,16 +241,19 @@ def create_chatbot() -> gr.Chatbot:
     return gr.Chatbot(**valid_args)
 
 
-def send_example_question(
+def add_example_to_chat(
     example_text: str,
     history: List[Dict[str, Any]],
-    mode: str,
-    top_k: int,
-    hf_model: str,
-) -> Tuple[List[Dict[str, Any]], str, str, str]:
-    """Directly triggers retrieval and generation for a clicked example question."""
-    temp_history = list(history or []) + [_make_message("user", example_text)]
-    return generate_bot_reply(temp_history, mode, top_k, hf_model)
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Adds an example question as a user message to the chat history.
+    Non-GPU step: the GPU-decorated generate_bot_reply is called separately
+    as a .then() handler to avoid ZeroGPU indirect-call issues.
+    """
+    if not example_text:
+        return "", history or []
+    new_history = list(history or []) + [_make_message("user", example_text)]
+    return "", new_history
 
 
 # ── Gradio Blocks Application ─────────────────────────────────────────────────
@@ -387,17 +402,18 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)") as demo:
         queue=False,
     )
 
-    # 3. Clickable example buttons
+    # 3. Clickable example buttons (two-step: add message -> generate reply)
+    #    generate_bot_reply (@spaces.GPU) must be the direct .then() handler,
+    #    not called indirectly through another function (ZeroGPU requirement).
     for btn, ex_text in example_buttons:
         btn.click(
-            fn=send_example_question,
-            inputs=[
-                gr.State(ex_text),
-                chatbot,
-                mode_selector,
-                top_k_slider,
-                hf_dropdown,
-            ],
+            fn=add_example_to_chat,
+            inputs=[gr.State(ex_text), chatbot],
+            outputs=[query_input, chatbot],
+            queue=False,
+        ).then(
+            fn=generate_bot_reply,
+            inputs=[chatbot, mode_selector, top_k_slider, hf_dropdown],
             outputs=[chatbot, chunks_display, comparison_display, gen_badge_box],
         )
 
