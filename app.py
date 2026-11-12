@@ -184,8 +184,7 @@ def create_chatbot() -> gr.Chatbot:
         "elem_id": "chatbot",
         "height": 480,
         "placeholder": "👋 Hello! I am Shahrina Khan's digital clone. Ask me anything about my academic journey, projects, coding habits, or future aspirations!",
-        "show_copy_button": True,
-        "bubble_full_width": False,
+        "buttons": ["copy"],
         "type": "messages",
     }
     sig = inspect.signature(gr.Chatbot.__init__)
@@ -214,7 +213,7 @@ theme = gr.themes.Soft(
     font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
 )
 
-with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)", theme=theme, css=CUSTOM_CSS) as demo:
+with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)") as demo:
 
     # 1. Mandatory Disclaimer Banner
     gr.HTML(
@@ -258,7 +257,7 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)", theme=them
 
             # Clickable Example Chips
             gr.Markdown("<p style='font-size:0.82rem;font-weight:600;margin-top:8px;margin-bottom:4px;color:var(--body-text-color-subdued);'>TRY ASKING AN EXAMPLE:</p>")
-            with gr.Row(wrap=True):
+            with gr.Row():
                 example_buttons = []
                 for ex in EXAMPLE_QUESTIONS:
                     btn = gr.Button(ex, size="sm", elem_classes=["chip-btn"])
@@ -366,4 +365,4 @@ with gr.Blocks(title="Shahrina Khan | AI Digital Clone (Hybrid RAG)", theme=them
         )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(theme=theme, css=CUSTOM_CSS)
